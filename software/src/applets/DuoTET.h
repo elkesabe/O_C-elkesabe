@@ -33,7 +33,7 @@
 // ideal to be able to modulate the parameters of the two quantizers
 // using other applets.
 
-#include "../CVInputMap.h"
+#include <arm_math.h>
 
 #define DUOTET_SCALE_MAX_LEN 32
 
@@ -49,52 +49,24 @@ public:
         return ( *(int16_t*)a - *(int16_t*)b );
     }
 
-    static int wrap(int val, int max) {
+    static int wrap(int val, const int max) {
         while(val >= max) val -= max;
         while(val < 0) val += max;
         return val;   
     }
 
     void conditionParams() {
-        for(int i=0; i<DUOTET_PARAM_LAST; i++) {
-            switch(i) {
-                case DUOTET_PARAM_TET:
-                    params[i] = constrain(params[i], 1, 63);
-                    break;
-                case DUOTET_PARAM_INTERVALA:
-                    params[i] = constrain(params[i], 0, params[DUOTET_PARAM_TET]);
-                    break;
-                case DUOTET_PARAM_INTERVALB:
-                    params[i] = constrain(params[i], 0, params[DUOTET_PARAM_TET]);
-                    break;
-                case DUOTET_PARAM_OFFSET:
-                    params[i] = constrain(params[i], 0, params[DUOTET_PARAM_SCALELEN]);
-                    break;
-                case DUOTET_PARAM_SCALELEN:
-                    params[i] = constrain(params[i], 1, DUOTET_SCALE_MAX_LEN);
-                    break;
-                case DUOTET_PARAM_BpA:
-                    params[i] = constrain(params[i], 0, 1);
-                    break;
-                case DUOTET_PARAM_Bp:
-                    params[i] = constrain(params[i], -31, 31);
-                    break;
-                case DUOTET_PARAM_Bu:
-                    params[i] = constrain(params[i], -63, 63);
-                    break;
-                case DUOTET_PARAM_Bl:
-                    params[i] = constrain(params[i], -63, 63);
-                    break;
-                case DUOTET_PARAM_Au:
-                    params[i] = constrain(params[i], -63, 63);
-                    break;
-                case DUOTET_PARAM_Al:
-                    params[i] = constrain(params[i], -63, 63);
-                    break;
-                default:
-                    break;
-            }
-        }
+      CONSTRAIN(params[DUOTET_PARAM_TET], 1, 63);
+      CONSTRAIN(params[DUOTET_PARAM_INTERVALA], 0, params[DUOTET_PARAM_TET]);
+      CONSTRAIN(params[DUOTET_PARAM_INTERVALB], 0, params[DUOTET_PARAM_TET]);
+      CONSTRAIN(params[DUOTET_PARAM_OFFSET], 0, params[DUOTET_PARAM_SCALELEN]);
+      CONSTRAIN(params[DUOTET_PARAM_SCALELEN], 1, DUOTET_SCALE_MAX_LEN);
+      CONSTRAIN(params[DUOTET_PARAM_BpA], 0, 1);
+      CONSTRAIN(params[DUOTET_PARAM_Bp], -31, 31);
+      CONSTRAIN(params[DUOTET_PARAM_Bu], -63, 63);
+      CONSTRAIN(params[DUOTET_PARAM_Bl], -63, 63);
+      CONSTRAIN(params[DUOTET_PARAM_Au], -63, 63);
+      CONSTRAIN(params[DUOTET_PARAM_Al], -63, 63);
     }
 
     void genScale() {
@@ -199,7 +171,12 @@ public:
             cv2note(cvInValues[i], cv_inputs[i].In());
             processedParams[i] = cvInValues[i] + params[i];
         }
-        cv2note(noteA, In(0), forceUpdate); cv2note(noteB, In(1), forceUpdate);
+        ForEachChannel(ch) {
+          if (continuous[ch] || Clock(ch)) {
+            continuous[ch] = !Clock(ch);
+            cv2note(ch?noteB:noteA, In(ch), forceUpdate);
+          }
+        }
         forceUpdate = false;
         int outA = noteToVoltage(getScaleNote(getNoteA()));
         int outB = noteToVoltage(getScaleNote(getNoteB()));
@@ -225,28 +202,28 @@ public:
         gfxEndCursor(EditMode() && (!aux_cursor || cursor <= DUOTET_PARAM_OFFSET));
         if(cursor > DUOTET_PARAM_OFFSET) {
           gfxStartCursor();
-          gfxPrintIcon(cv_inputs[cursor].Icon());
-          gfxEndCursor(EditMode() && aux_cursor);
+          gfxPrint(cv_inputs[cursor]);
+          gfxEndCursor(EditMode() && aux_cursor, false, cv_inputs[cursor].InputName());
         }
 
         for(int i=0; i<tet; i++) {
             gfxPixel(
-                (int)(x+sin(2.0*M_PI*i/tet)*((w-5)>>1)),
-                (int)(y-cos(2.0*M_PI*i/tet)*(h>>1))
+                (int)(x+arm_sin_f32(2.0*M_PI*i/tet)*((w-5)>>1)),
+                (int)(y-arm_cos_f32(2.0*M_PI*i/tet)*(h>>1))
             );
         }
 
         for(int i=0; i<len; i++) {
             int note = scale[i];
             gfxCircle(
-                (int)(x+sin(2.0*M_PI*note/tet)*((w-5)>>1)),
-                (int)(y-cos(2.0*M_PI*note/tet)*(h>>1)),
+                (int)(x+arm_sin_f32(2.0*M_PI*note/tet)*((w-5)>>1)),
+                (int)(y-arm_cos_f32(2.0*M_PI*note/tet)*(h>>1)),
                 2
             );
             if(getPitchClass(getNoteA()) == note || getPitchClass(getNoteB()) == note) {
                 gfxFrame(
-                    (int)(x+sin(2.0*M_PI*note/tet)*((w-5)>>1))-1,
-                    (int)(y-cos(2.0*M_PI*note/tet)*(h>>1))-1,
+                    (int)(x+arm_sin_f32(2.0*M_PI*note/tet)*((w-5)>>1))-1,
+                    (int)(y-arm_cos_f32(2.0*M_PI*note/tet)*(h>>1))-1,
                     3, 3
                 );
             }
@@ -395,4 +372,5 @@ private:
 
     bool aux_cursor = false;
     bool forceUpdate = false;
+    bool continuous[2] = {true};
 };

@@ -48,8 +48,8 @@ public:
     gfxPrintDb(level);
     gfxEndCursor(cursor == 0);
     gfxStartCursor();
-    gfxPrintIcon(level_cv.Icon());
-    gfxEndCursor(cursor == 1);
+    gfxPrint(level_cv);
+    gfxEndCursor(cursor == 1, false, level_cv.InputName());
 
     gfxPrint(1, 25, "Off:");
     gfxStartCursor();
@@ -61,8 +61,8 @@ public:
     graphics.printf("%3d%%", shape);
     gfxEndCursor(cursor == 3);
     gfxStartCursor();
-    gfxPrintIcon(PARAM_MAP_ICONS + 8 * shape_cv.source);
-    gfxEndCursor(cursor == 4);
+    gfxPrint(shape_cv);
+    gfxEndCursor(cursor == 4, false, shape_cv.InputName());
 
     gfxPrint(1, 45, "Rectify: ");
     gfxStartCursor();
@@ -73,6 +73,18 @@ public:
     gfxStartCursor();
     gfxPrintIcon(invert ? CHECK_ON_ICON : CHECK_OFF_ICON);
     gfxEndCursor(cursor == 6);
+
+    gfxDisplayInputMapEditor();
+  }
+
+  void OnButtonPress() override {
+    if (CheckEditInputMapPress(
+          cursor,
+          IndexedInput(1, level_cv),
+          IndexedInput(4, shape_cv)
+        ))
+      return;
+    CursorToggle();
   }
 
   void OnEncoderMove(int direction) {
@@ -80,6 +92,7 @@ public:
       MoveCursor(cursor, direction, NUM_PARAMS - 1);
       return;
     }
+    if(EditSelectedInputMap(direction)) return;
     switch (cursor) {
       case 0:
         SetLevel(level + direction);

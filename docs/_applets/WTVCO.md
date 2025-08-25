@@ -12,6 +12,7 @@ The visualizer shows the selected waveform. A, B, and C are the source waveforms
 As the core feature of the applet, CV modulation of the **Blend** parameter will change the shape of the output waveform. When Blend CV = 0V, the output will resemble waveform A, at +2.5V it will resemble waveform B, and at +5V, waveform C. Any CV in between will produce a proportional interpolation of the corresponding pair of source waves. Voltages beyond +5 and below 0 will result in "inverted-interpolation-overflow-wavefolding," which is rad. Try it!
 
 ### I/O:
+
 |        | 1/3                     | 2/4                                  |
 | ------ | :---------------------: | :----------------------------------: |
 | TRIG   | Oct-Shift Down          | Oct-Shift Up                         |
@@ -28,6 +29,8 @@ As the core feature of the applet, CV modulation of the **Blend** parameter will
 * **Blend** - morphs output waveform proportionally between a pair of selected source waveforms (A/B or B/C).
   - Blend can be adjusted by encoder, or CV input modulation. _CV2 is set to Blend by default._
   - The Output Visualizer displays blended wave shape. A, B, and C visualizers show the respective source waves.
+  - Blend is also encoder-adjustable at the Output Visualizer page by selecting the ~ icon.
+  - The "Blendicator" above the waveform letters shows which pair of waves is being blended by the encoder.
 * **Osc2 Reverse** -  waveform of output 2 is reversable on the Params menu.
 
 * **Volume** - regular ordinary volume attenuation, [0-100%].
@@ -50,6 +53,7 @@ As the core feature of the applet, CV modulation of the **Blend** parameter will
 * **Noise Freeze** - while the Noise wave is displayed in the waveform selection menu, toggles between "realtime" and "frozen" noise buffer.
 * **Random-Step Re-Roll** - while the RandStp wave is displayed in the waveform selection menu, instantly re-randomizes the step heights.
   - The steps are randomized each time the waveform is re-selected, but this shortcut prevents extra encoder movements.
+* **Link Osc1+2 Pitch CV** - while editing the base pitch parameter on either oscillator, toggles linking of pitch CV modulation. Either CV Dest set to Pitch will adjust offset on both oscillators. Base pitch determines their fixed pitch difference when linked.
 
 ### Credits:
 Authored by beau.seidon, with lots of good advice from qiemem and djphazer.

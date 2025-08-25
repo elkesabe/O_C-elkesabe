@@ -27,12 +27,18 @@ class hMIDIIn : public HemisphereApplet {
 public:
 
     enum hMIDIIn_Cursor {
-        hMIDIIn_A_MIDI_CHANNEL = 0,
+        MAP_INDEX_A,
+        hMIDIIn_A_MIDI_CHANNEL,
         hMIDIIn_A_OUTPUT_MODE,
         hMIDIIn_A_POLY_VOICE,
+        MAP_A_RANGELOW, MAP_A_RANGEHIGH,
+
+        MAP_INDEX_B,
         hMIDIIn_B_MIDI_CHANNEL,
         hMIDIIn_B_OUTPUT_MODE,
         hMIDIIn_B_POLY_VOICE,
+        MAP_B_RANGELOW, MAP_B_RANGEHIGH,
+
         hMIDIIn_GLOBAL_POLY_MODE,
         hMIDIIn_GLOBAL_PROG_CHANGE_CHANNEL,
         hMIDIIn_LOG_VIEW,
@@ -47,16 +53,17 @@ public:
 
     void Start() {
         // int v = 2 * hemisphere;
+        map_index[0] = io_offset;
+        map_index[1] = io_offset + 1;
         ForEachChannel(ch) {
-            int ch_ = ch + io_offset;
-            frame.MIDIState.channel[ch_] = 0; // Default channel 1
-            frame.MIDIState.function[ch_] = 0; // (ch_ % 2) ? HEM_MIDI_GATE_POLY_OUT : HEM_MIDI_NOTE_POLY_OUT;
-            frame.MIDIState.outputs[ch_] = 0;
-            frame.MIDIState.dac_polyvoice[ch_] = 0; // hemisphere;
+            MIDIMapping &map = frame.MIDIState.mapping[map_index[ch]];
+            map.output = 0;
             Out(ch, 0);
         }
-
         frame.MIDIState.log_index = 0;
+    }
+
+    void Reset() {
         frame.MIDIState.clock_count = 0;
 
         frame.MIDIState.ClearMonoBuffer();
@@ -69,25 +76,16 @@ public:
         // MIDI input is processed at a higher level
         // here, we just pass the MIDI signals on to physical outputs
         ForEachChannel(ch) {
-            int ch_ = ch + io_offset;
-            switch (frame.MIDIState.function[ch_]) {
+            int ch_ = map_index[ch];
+            MIDIMapping &map = frame.MIDIState.mapping[ch_];
+            switch (map.function) {
                 case HEM_MIDI_NOOP:
-                    break;
-                case HEM_MIDI_CLOCK_OUT:
-                case HEM_MIDI_START_OUT:
-                case HEM_MIDI_TRIG_OUT:
-                case HEM_MIDI_TRIG_1ST_OUT:
-                case HEM_MIDI_TRIG_ALWAYS_OUT:
-                    if (frame.MIDIState.trigout_q[ch_]) {
-                        frame.MIDIState.trigout_q[ch_] = 0;
-                        ClockOut(ch);
-                    }
                     break;
                 case HEM_MIDI_RUN_OUT:
                     GateOut(ch, frame.MIDIState.clock_run);
                     break;
                 default:
-                    Out(ch, frame.MIDIState.outputs[ch_]);
+                    Out(ch, map.output);
                     break;
             }
         }
@@ -95,12 +93,17 @@ public:
 
     void View() {
         switch (cursor) {
+            default:
             case hMIDIIn_A_MIDI_CHANNEL:
             case hMIDIIn_A_OUTPUT_MODE:
             case hMIDIIn_A_POLY_VOICE:
             case hMIDIIn_B_MIDI_CHANNEL:
             case hMIDIIn_B_OUTPUT_MODE:
             case hMIDIIn_B_POLY_VOICE:
+            case MAP_A_RANGELOW:
+            case MAP_A_RANGEHIGH:
+            case MAP_B_RANGELOW:
+            case MAP_B_RANGEHIGH:
                 DrawChannelPage();
                 DrawMonitor();
                 break;
@@ -109,38 +112,70 @@ public:
                 DrawGlobalPage();
                 break;
             case hMIDIIn_LOG_VIEW:
-            default:
                 DrawLog();
                 break;
         }
     }
 
+    void AuxButton() override {
+      switch (cursor) {
+        case hMIDIIn_A_OUTPUT_MODE:
+        case hMIDIIn_B_OUTPUT_MODE:
+          {
+            int ch = map_index[io_page];
+            MIDIMapping &map = frame.MIDIState.mapping[ch];
+            map.channel = 16; // omni
+            map.function = HEM_MIDI_LEARN;
+            map.function_cc = -1; // auto-learn MIDI CC or precise NoteOn
+            frame.MIDIState.clock_count = 0;
+            break;
+          }
+        default: break;
+      }
+      CancelEdit();
+    }
     // void OnButtonPress() { }
 
     void OnEncoderMove(int direction) {
         if (!EditMode()) {
             MoveCursor(cursor, direction, hMIDIIn_CURSOR_LAST);
-            io_page = (cursor > hMIDIIn_A_POLY_VOICE);
+            io_page = (cursor >= MAP_INDEX_B);
             return;
         }
-        int ch = io_offset + io_page;
+        int ch = map_index[io_page];
+        MIDIMapping &map = frame.MIDIState.mapping[ch];
         switch (cursor) {
+            case MAP_INDEX_A:
+            case MAP_INDEX_B:
+                map_index[cursor > MAP_INDEX_A] =
+                  constrain(map_index[cursor > MAP_INDEX_A] + direction, 0, HS::MIDIMAP_MAX - 1);
+                break;
             case hMIDIIn_A_MIDI_CHANNEL:
             case hMIDIIn_B_MIDI_CHANNEL:
-                frame.MIDIState.channel[ch] = constrain(frame.MIDIState.channel[ch] + direction, 0, 16); // 16 = omni
+                map.channel = constrain(map.channel + direction, 0, 16); // 16 = omni
                 frame.MIDIState.UpdateMidiChannelFilter();
                 break;
             case hMIDIIn_A_OUTPUT_MODE:
             case hMIDIIn_B_OUTPUT_MODE:
-                frame.MIDIState.function[ch] = constrain(frame.MIDIState.function[ch] + direction, 0, HEM_MIDI_MAX_FUNCTION);
-                frame.MIDIState.function_cc[ch] = -1; // auto-learn MIDI CC
+                map.function = constrain(map.function + direction, 0, HEM_MIDI_MAX_FUNCTION);
+                if (map.function == HEM_MIDI_CC_OUT)
+                  map.function_cc = -1; // auto-learn MIDI CC
                 frame.MIDIState.clock_count = 0;
                 break;
             case hMIDIIn_A_POLY_VOICE:
             case hMIDIIn_B_POLY_VOICE:
-                frame.MIDIState.dac_polyvoice[ch] = constrain(frame.MIDIState.dac_polyvoice[ch] + direction, 0, DAC_CHANNEL_LAST - 1);
+                map.dac_polyvoice = constrain(map.dac_polyvoice + direction, 0, DAC_CHANNEL_LAST - 1);
                 frame.MIDIState.UpdateMaxPolyphony();
                 break;
+            case MAP_A_RANGELOW:
+            case MAP_B_RANGELOW:
+                map.AdjustRangeLow(direction);
+                break;
+            case MAP_A_RANGEHIGH:
+            case MAP_B_RANGEHIGH:
+                map.AdjustRangeHigh(direction);
+                break;
+
             case hMIDIIn_GLOBAL_POLY_MODE:
                 frame.MIDIState.poly_mode = constrain(frame.MIDIState.poly_mode + direction, 0, POLY_LAST);
                 break;
@@ -156,34 +191,14 @@ public:
 
     uint64_t OnDataRequest() {
         uint64_t data = 0;
-        Pack(data, PackLocation {0,5}, frame.MIDIState.channel[io_offset + 0]);
-        Pack(data, PackLocation {5,5}, frame.MIDIState.channel[io_offset + 1]);
-        // 6 bits empty here
-        Pack(data, PackLocation {14,7}, frame.MIDIState.function_cc[io_offset + 0] + 1);
-        Pack(data, PackLocation {21,7}, frame.MIDIState.function_cc[io_offset + 1] + 1);
-
-        Pack(data, PackLocation {28,5}, frame.MIDIState.function[io_offset + 0]);
-        Pack(data, PackLocation {33,5}, frame.MIDIState.function[io_offset + 1]);
-
-        Pack(data, PackLocation {38,3}, frame.MIDIState.dac_polyvoice[io_offset + 0]);
-        Pack(data, PackLocation {41,3}, frame.MIDIState.dac_polyvoice[io_offset + 1]);
-
-        Pack(data, PackLocation {44,4}, frame.MIDIState.poly_mode);
+        Pack(data, PackLocation{0, 5}, map_index[0]);
+        Pack(data, PackLocation{8, 5}, map_index[1]);
         return data;
     }
 
     void OnDataReceive(uint64_t data) {
-        frame.MIDIState.channel[io_offset + 0] = constrain(Unpack(data, PackLocation {0,5}), 0, 16);
-        frame.MIDIState.channel[io_offset + 1] = constrain(Unpack(data, PackLocation {5,5}), 0, 16);
-        frame.MIDIState.function[io_offset + 0] = constrain(Unpack(data, PackLocation {28,5}), 0, HEM_MIDI_MAX_FUNCTION);
-        frame.MIDIState.function[io_offset + 1] = constrain(Unpack(data, PackLocation {33,5}), 0, HEM_MIDI_MAX_FUNCTION);
-        frame.MIDIState.function_cc[io_offset + 0] = constrain(Unpack(data, PackLocation {14,7}) - 1, -1, 127);
-        frame.MIDIState.function_cc[io_offset + 1] = constrain(Unpack(data, PackLocation {21,7}) - 1, -1, 127);
-        frame.MIDIState.dac_polyvoice[io_offset + 0] = constrain(Unpack(data, PackLocation {38,3}), 0, DAC_CHANNEL_LAST - 1);
-        frame.MIDIState.dac_polyvoice[io_offset + 1] = constrain(Unpack(data, PackLocation {41,3}), 0, DAC_CHANNEL_LAST - 1);
-        frame.MIDIState.poly_mode = constrain(Unpack(data, PackLocation {44,4}), 0, POLY_LAST);
-        frame.MIDIState.UpdateMidiChannelFilter();
-        frame.MIDIState.UpdateMaxPolyphony();
+        map_index[0] = Unpack(data, PackLocation {0,5});
+        map_index[1] = Unpack(data, PackLocation {8,5});
     }
 
 protected:
@@ -193,8 +208,8 @@ protected:
         //help[HELP_DIGITAL2] = "";
         //help[HELP_CV1]      = "";
         //help[HELP_CV2]      = "";
-        help[HELP_OUT1]       = midi_fn_name[frame.MIDIState.function[io_offset + 0]];
-        help[HELP_OUT2]       = midi_fn_name[frame.MIDIState.function[io_offset + 1]];
+        help[HELP_OUT1]       = midi_fn_name[frame.MIDIState.mapping[map_index[0]].function];
+        help[HELP_OUT2]       = midi_fn_name[frame.MIDIState.mapping[map_index[1]].function];
         //help[HELP_EXTRA1]   = "";
         //help[HELP_EXTRA2]   = "";
         //                      "---------------------" <-- Extra text size guide
@@ -203,15 +218,16 @@ protected:
 private:
     // Housekeeping
     int cursor;
+    int map_index[2] = {0, 1};
     int io_page = 0;
     int last_icon_ticks[2];
 
     void DrawMonitor() {
         if ((OC::CORE::ticks - frame.MIDIState.last_msg_tick) < 100) {
             // reset icon display timers
-            if (frame.MIDIState.channel[io_offset + 0] == frame.MIDIState.last_midi_channel)
+            if (frame.MIDIState.mapping[map_index[0]].channel == frame.MIDIState.last_midi_channel)
                 last_icon_ticks[0] = OC::CORE::ticks;
-            if (frame.MIDIState.channel[io_offset + 1] == frame.MIDIState.last_midi_channel)
+            if (frame.MIDIState.mapping[map_index[1]].channel == frame.MIDIState.last_midi_channel)
                 last_icon_ticks[1] = OC::CORE::ticks;
         }
 
@@ -221,22 +237,38 @@ private:
 
     void DrawChannelPage() {
         char out_label[] = {(char)('A' + io_offset + io_page), '\0' };
-        gfxPrint(1, 13, out_label); gfxPrint(":");
+        gfxPrint(1, 13, out_label);
+        gfxPrint(": ");
+        gfxPrint(OC::Strings::cv_input_names_none[ADC_CHANNEL_LAST + DAC_CHANNEL_LAST + map_index[io_page] + 1]);
+
+        // ------------------ //
         gfxLine(1, 22, 63, 22);
 
-        uint8_t m_ch = frame.MIDIState.channel[io_offset + io_page];
+        MIDIMapping &map = frame.MIDIState.mapping[map_index[io_page]];
+        uint8_t m_ch = map.channel;
         gfxPrint(1, 25, "MIDICh:");
         if (m_ch > 15) graphics.printf("%3s", "Om");
         else graphics.printf("%3d", m_ch + 1);
 
-        gfxIcon(2, 34, MIDI_ICON); gfxPrint(13, 35, midi_fn_name[frame.MIDIState.function[io_offset + io_page]]);
-        if (frame.MIDIState.function[io_offset + io_page] == HEM_MIDI_CC_OUT)
-            gfxPrint(frame.MIDIState.function_cc[io_offset + io_page]);
+        gfxIcon(2, 34, MIDI_ICON);
+        if (map.function < HEM_MIDI_FN_COUNT)
+          gfxPrint(13, 35, midi_fn_name[map.function]);
+        if (map.function == HEM_MIDI_CC_OUT)
+            gfxPrint(map.function_cc);
 
-        gfxPrint(1, 45, "Voice:"); gfxPrint(55, 45, frame.MIDIState.dac_polyvoice[io_offset + io_page] + 1);
+        if (cursor >= (MAP_A_RANGELOW + io_page*(MAP_A_RANGEHIGH+1))) {
+          gfxPrint(1, 45, "<"); gfxPrint(HS::midi_note_numbers[map.range_low]);
+          gfxPrint(34, 45, HS::midi_note_numbers[map.range_high]); gfxPrint(">");
+        } else {
+          gfxPrint(1, 45, "Voice:"); gfxPrint(55, 45, map.dac_polyvoice + 1);
+        }
 
         // Cursor
         switch (cursor) {
+            case MAP_INDEX_A:
+            case MAP_INDEX_B:
+                gfxCursor(19, 21, 19);
+                break;
             case hMIDIIn_A_MIDI_CHANNEL:
             case hMIDIIn_B_MIDI_CHANNEL:
                 gfxCursor(42, 33, 21);
@@ -248,6 +280,14 @@ private:
             case hMIDIIn_A_POLY_VOICE:
             case hMIDIIn_B_POLY_VOICE:
                 gfxCursor(42, 53, 21);
+                break;
+            case MAP_A_RANGELOW:
+            case MAP_B_RANGELOW:
+                gfxCursor(7, 53, 19);
+                break;
+            case MAP_A_RANGEHIGH:
+            case MAP_B_RANGEHIGH:
+                gfxCursor(34, 53, 19);
                 break;
             default: break;
         }

@@ -46,11 +46,6 @@
 #include "hemisphere_audio_config.h"
 #endif
 
-#ifdef ENABLE_APP_CALIBR8OR
-// We depend on Calibr8or to save quantizer settings
-#include "APP_CALIBR8OR.h"
-#endif
-
 void HS::DrawAppletList(bool blink) {
   const size_t LineH = 12;
 
@@ -93,7 +88,7 @@ enum HEMISPHERE_SETTINGS {
     HEMISPHERE_TRIGMAP,
     HEMISPHERE_CVMAP,
     HEMISPHERE_GLOBALS,
-    HEMISPHERE_SETTING_LAST
+    HEMISPHERE_SETTINGS_COUNT
 };
 
 #ifdef __IMXRT1062__
@@ -102,6 +97,8 @@ static constexpr int HEM_NR_OF_PRESETS = 50;
 static const char* const PRESET_FILENAME = "HEM_PRESETS.DAT";
 #elif defined(MOAR_PRESETS)
 static constexpr int HEM_NR_OF_PRESETS = 16;
+#elif defined(CUSTOM_BUILD) && !defined(PEWPEWPEW)
+static constexpr int HEM_NR_OF_PRESETS = 4;
 #else
 static constexpr int HEM_NR_OF_PRESETS = 8;
 #endif
@@ -112,7 +109,7 @@ static constexpr int HEM_NR_OF_PRESETS = 8;
 #ifdef __IMXRT1062__
 #else
 class HemispherePreset : public SystemExclusiveHandler,
-    public settings::SettingsBase<HemispherePreset, HEMISPHERE_SETTING_LAST> {
+    public settings::SettingsBase<HemispherePreset, HEMISPHERE_SETTINGS_COUNT> {
 public:
     int GetAppletId(int h) {
         return (h == LEFT_HEMISPHERE) ? values_[HEMISPHERE_SELECTED_LEFT_ID]
@@ -147,8 +144,8 @@ public:
       uint16_t cvmap = 0;
       uint16_t trigmap = 0;
       for (size_t i = 0; i < 4; ++i) {
-        trigmap |= (uint16_t(HS::trigger_mapping[i] + 1) & 0x0F) << (i*4);
-        cvmap |= (uint16_t(HS::cvmapping[i] + 1) & 0x0F) << (i*4);
+        trigmap |= (uint16_t(HS::trigmap[i].source + 1) & 0x0F) << (i*4);
+        cvmap |= (uint16_t(HS::cvmap[i].source + 1) & 0x0F) << (i*4);
       }
 
       bool changed = (uint16_t(values_[HEMISPHERE_TRIGMAP]) != trigmap)
@@ -162,11 +159,11 @@ public:
       for (size_t i = 0; i < 4; ++i) {
         int val = (uint16_t(values_[HEMISPHERE_TRIGMAP]) >> (i*4)) & 0x0F;
         if (val != 0)
-          HS::trigger_mapping[i] = constrain(val - 1, 0, TRIGMAP_MAX);
+          HS::trigmap[i].source = constrain(val - 1, 0, TRIGMAP_MAX);
 
         val = (uint16_t(values_[HEMISPHERE_CVMAP]) >> (i*4)) & 0x0F;
         if (val != 0)
-          HS::cvmapping[i] = constrain(val - 1, 0, CVMAP_MAX);
+          HS::cvmap[i].source = constrain(val - 1, 0, CVMAP_MAX);
       }
     }
 
@@ -242,6 +239,7 @@ public:
 
 };
 
+// 1 extra preset for global data... it's a dirty hack for T32.
 HemispherePreset hem_presets[HEM_NR_OF_PRESETS + 1];
 HemispherePreset *hem_active_preset = 0;
 #endif
@@ -263,10 +261,10 @@ public:
         zoom_slot = -1;
         clock_setup = 0;
 
-        for (int i = 0; i < 4; ++i) {
-            quant_scale[i] = OC::Scales::SCALE_SEMI;
-            quantizer[i].Init();
-            quantizer[i].Configure(OC::Scales::GetScale(quant_scale[i]), 0xffff);
+        // Defaults for Q-engine settings.
+        // These are overwritten later when global settings are loaded.
+        for (int i = 0; i < QUANT_CHANNEL_COUNT; ++i) {
+            q_engine[i].Configure( (i<4)? OC::Scales::SCALE_SEMI : i-4, 0xffff);
         }
 
         showhide_cursor.Init(0, HEMISPHERE_AVAILABLE_APPLETS - 1);
@@ -286,11 +284,6 @@ public:
         if (!hem_active_preset)
             LoadFromPreset(0);
 #endif
-        // restore quantizer settings
-        for (int i = 0; i < 4; ++i) {
-            quantizer[i].Init();
-            quantizer[i].Configure(OC::Scales::GetScale(quant_scale[i]), 0xffff);
-        }
     }
     void Suspend() {
 #ifdef __IMXRT1062__
@@ -335,11 +328,6 @@ public:
 
         // initiate actual EEPROM save - ONLY if necessary!
         if (doSave && !skip_eeprom) {
-#ifdef ENABLE_APP_CALIBR8OR
-          // call Calibr8or so it remembers quantizer settings
-          // this also takes care of the EEPROM save
-          Calibr8or_instance.SavePreset();
-#else
           // initiate actual EEPROM save
           OC::CORE::app_isr_enabled = false;
           //OC::draw_save_message(32);
@@ -348,7 +336,6 @@ public:
           OC::CORE::app_isr_enabled = true;
 
           PokePopup(HS::MESSAGE_POPUP, HS::PRESET_SAVED);
-#endif
         }
     }
 #endif
@@ -358,9 +345,15 @@ public:
         APPLET_METADATA_KEY = 0, // applet ids
         CLOCK_DATA_KEY = 1,
         GLOBALS_KEY = 2,
-        INPUT_MAP_KEY = 3,
+        OLD_INPUT_MAP_KEY = 3,
+
+        OUTSKIP_KEY = 4,
+        TRIGMAP_KEY = 5, // 4 x 16-bit DigitalInputMap
+        CVMAP_KEY = 6, // 4 x 16-bit CVInputMap
+
         APPLET_L_DATA_KEY = 10,
         APPLET_R_DATA_KEY = 11,
+
 
         FILTERMASK1_KEY = 100,
         FILTERMASK2_KEY = 101,
@@ -382,14 +375,19 @@ public:
         global_data = ClockSetup_instance.GetGlobals();
         PhzConfig::setValue(preset_key | GLOBALS_KEY, global_data);
 
-        // Input Mappings
         uint64_t data = 0;
-        for (size_t i = 0; i < 4; ++i) {
-          Pack(data, PackLocation{0 + i*16, 4}, HS::trigger_mapping[i] + 1);
-          Pack(data, PackLocation{4 + i*16, 4}, HS::cvmapping[i] + 1);
-          Pack(data, PackLocation{8 + i*16, 8}, HS::frame.clockskip[i]);
+        // Input Mappings
+        data = PackPackables(HS::trigmap[0], HS::trigmap[1], HS::trigmap[2], HS::trigmap[3]);
+        PhzConfig::setValue(preset_key | TRIGMAP_KEY, data);
+
+        data = PackPackables(HS::cvmap[0], HS::cvmap[1], HS::cvmap[2], HS::cvmap[3]);
+        PhzConfig::setValue(preset_key | CVMAP_KEY, data);
+
+        data = 0;
+        for (size_t i = 0; i < DAC_CHANNEL_COUNT; ++i) {
+          Pack(data, PackLocation{i*8, 8}, HS::frame.clockskip[i]);
         }
-        PhzConfig::setValue(preset_key | INPUT_MAP_KEY, data);
+        PhzConfig::setValue(preset_key | OUTSKIP_KEY, data);
 
         data = 0;
         for (size_t h = 0; h < 2; h++)
@@ -418,11 +416,13 @@ public:
             int16_t scale_factor; // precision of 0.01% as an offset from 100%
             int8_t transpose; // in semitones
           */
+          auto &q = q_engine[qslot];
           data = PackPackables(
-              HS::quant_scale[qslot],
-              HS::q_octave[qslot],
-              HS::root_note[qslot],
-              HS::q_mask[qslot]);
+              q.scale,
+              q.octave,
+              q.root_note,
+              q.mask
+              );
           PhzConfig::setValue(Q_ENGINE_KEY + qslot, data);
         }
 
@@ -463,16 +463,29 @@ public:
         ClockSetup_instance.SetGlobals(global_data);
 
         // Input Mappings
-        PhzConfig::getValue(preset_key | INPUT_MAP_KEY, data);
-        for (size_t i = 0; i < 4; ++i)
-        {
-          int val = Unpack(data, PackLocation{i*16, 4});
-          if (val != 0) HS::trigger_mapping[i] = constrain(val - 1, 0, TRIGMAP_MAX);
+        if (!PhzConfig::getValue(preset_key | CVMAP_KEY, data)) {
+          PhzConfig::getValue(preset_key | OLD_INPUT_MAP_KEY, data);
+          for (size_t i = 0; i < 4; ++i)
+          {
+            int val = Unpack(data, PackLocation{i*16, 4});
+            if (val != 0) HS::trigmap[i].source = constrain(val - 1, -1, TRIGMAP_MAX);
 
-          val = Unpack(data, PackLocation{4 + i*16, 4});
-          if (val != 0) HS::cvmapping[i] = constrain(val - 1, 0, CVMAP_MAX);
+            val = Unpack(data, PackLocation{4 + i*16, 4});
+            if (val != 0) HS::cvmap[i].source = constrain(val - 1, 0, CVMAP_MAX);
 
-          HS::frame.clockskip[i] = Unpack(data, PackLocation{8 + i*16, 8});
+            HS::frame.clockskip[i] = Unpack(data, PackLocation{8 + i*16, 8});
+          }
+        } else {
+          UnpackPackables(data, HS::cvmap[0], HS::cvmap[1], HS::cvmap[2], HS::cvmap[3]);
+
+          PhzConfig::getValue(preset_key | TRIGMAP_KEY, data);
+          UnpackPackables(data, HS::trigmap[0], HS::trigmap[1], HS::trigmap[2], HS::trigmap[3]);
+
+          PhzConfig::getValue(preset_key | OUTSKIP_KEY, data);
+          for (size_t i = 0; i < DAC_CHANNEL_COUNT; ++i)
+          {
+            HS::frame.clockskip[i] = Unpack(data, PackLocation{i*8, 8});
+          }
         }
 
         // --- Global stuff ---
@@ -486,12 +499,13 @@ public:
         for (size_t qslot = 0; qslot < QUANT_CHANNEL_COUNT; ++qslot) {
           if (!PhzConfig::getValue(Q_ENGINE_KEY + qslot, data))
               break;
+          auto &q = q_engine[qslot];
           UnpackPackables(data,
-              HS::quant_scale[qslot],
-              HS::q_octave[qslot],
-              HS::root_note[qslot],
-              HS::q_mask[qslot]);
-          QuantizerConfigure(qslot, quant_scale[qslot], q_mask[qslot]);
+              q.scale,
+              q.octave,
+              q.root_note,
+              q.mask);
+          q.Reconfig();
         }
 #else
         // T3.2 uses EEPROM interface
@@ -570,7 +584,7 @@ public:
                 //continue;
             }
 
-            f.MIDIState.ProcessMIDIMsg(device.getChannel(), message, data1, data2);
+            f.MIDIState.ProcessMIDIMsg({device.getChannel(), message, data1, data2});
 #if defined(__IMXRT1062__)
             next_device.send(message, data1, data2, device.getChannel(), 0);
   #if defined(ARDUINO_TEENSY41)
@@ -605,43 +619,6 @@ public:
         {
             int index = my_applet[h];
 
-            // MIDI signals mixed with inputs to applets
-            if (HS::available_applets[index].id != 150) // not MIDI In
-            {
-                ForEachChannel(ch) {
-                    int chan = h*2 + ch;
-                    // mix CV inputs with applicable MIDI signals
-                    switch (HS::frame.MIDIState.function[chan]) {
-                    case HEM_MIDI_CC_OUT:
-                    case HEM_MIDI_NOTE_OUT:
-                    case HEM_MIDI_NOTE_POLY_OUT:
-                    case HEM_MIDI_NOTE_MIN_OUT:
-                    case HEM_MIDI_NOTE_MAX_OUT:
-                    case HEM_MIDI_NOTE_PEDAL_OUT:
-                    case HEM_MIDI_NOTE_INV_OUT:
-                    case HEM_MIDI_VEL_OUT:
-                    case HEM_MIDI_VEL_POLY_OUT:
-                    case HEM_MIDI_AT_CHAN_OUT:
-                    case HEM_MIDI_AT_KEY_POLY_OUT:
-                    case HEM_MIDI_PB_OUT:
-                        HS::frame.inputs[chan] += HS::frame.MIDIState.outputs[chan];
-                        break;
-                    case HEM_MIDI_GATE_OUT:
-                    case HEM_MIDI_GATE_POLY_OUT:
-                    case HEM_MIDI_GATE_INV_OUT:
-                        HS::frame.gate_high[chan] |= (HS::frame.MIDIState.outputs[chan] > (12 << 7));
-                        break;
-                    case HEM_MIDI_TRIG_OUT:
-                    case HEM_MIDI_TRIG_1ST_OUT:
-                    case HEM_MIDI_TRIG_ALWAYS_OUT:
-                    case HEM_MIDI_CLOCK_OUT:
-                    case HEM_MIDI_START_OUT:
-                        HS::frame.clocked[chan] |= HS::frame.MIDIState.trigout_q[chan];
-                        HS::frame.MIDIState.trigout_q[chan] = 0;
-                        break;
-                    }
-                }
-            }
             if (HS::clock_m.auto_reset)
                 HS::available_applets[index].instance[h]->Reset();
 
@@ -720,8 +697,10 @@ public:
               // dotted screen border during applet select
               gfxFrame(0, 0, 128, 64, true);
             }
-            else
+            else {
               HS::available_applets[index].instance[zoom_slot]->BaseView(true, zoom_cursor < 0);
+              gfxDisplayInputMapEditor();
+            }
 
             // draw cursor for editing applet select and input maps
             if (zoom_cursor < 0) {
@@ -813,10 +792,16 @@ public:
                 select_mode = zoom_slot;
               break;
             //// 0=select; 1,2=trigmap; 3,4=cvmap; 5,6=outmode
-            case 1:
-            case 2:
             case 3:
             case 4:
+              if (CheckEditInputMapPress(
+                    zoom_cursor,
+                    IndexedInput(3, cvmap[zoom_slot*2]),
+                    IndexedInput(4, cvmap[zoom_slot*2+1])
+                  ))
+                break;
+            case 1:
+            case 2:
             case 5:
             case 6:
             default:
@@ -992,16 +977,13 @@ public:
                 {
                   clock_m.SetMultiply(clock_m.GetMultiply(chan) + event.value, chan);
                 } else
-                  HS::trigger_mapping[zoom_slot*2 + zoom_cursor - 1] = constrain(
-                      HS::trigger_mapping[zoom_slot*2 + zoom_cursor - 1] + event.value,
-                      0, TRIGMAP_MAX);
+                  HS::trigmap[zoom_slot*2 + zoom_cursor - 1].ChangeSource(event.value);
                 break;
               }
               case 3:
               case 4:
-                HS::cvmapping[zoom_slot*2 + zoom_cursor - 3] =
-                  constrain( HS::cvmapping[zoom_slot*2 + zoom_cursor - 3] + event.value,
-                      0, CVMAP_MAX);
+                if (!EditSelectedInputMap(event.value))
+                  HS::cvmap[zoom_slot*2 + zoom_cursor - 3].ChangeSource(event.value);
                 break;
               case 5:
               case 6:
@@ -1079,7 +1061,11 @@ public:
 
         case UI::EVENT_BUTTON_LONG_PRESS:
             if (event.control == OC::CONTROL_BUTTON_B) ToggleConfigMenu();
+            break;
+
+        case UI::EVENT_BUTTON_LONG_RELEASE:
             if (event.control == OC::CONTROL_BUTTON_L) ToggleClockRun();
+            if (event.control == OC::CONTROL_BUTTON_R) OC::ui.JumpToMenu();
             break;
 
         default: break;
@@ -1182,15 +1168,14 @@ private:
         case TRIGMAP2:
         case TRIGMAP3:
         case TRIGMAP4:
-            HS::trigger_mapping[config_cursor-TRIGMAP1] = constrain(
-                HS::trigger_mapping[config_cursor-TRIGMAP1] + dir,
-                0, TRIGMAP_MAX);
+            HS::trigmap[config_cursor-TRIGMAP1].ChangeSource(dir);
             break;
         case CVMAP1:
         case CVMAP2:
         case CVMAP3:
         case CVMAP4:
-            HS::cvmapping[config_cursor-CVMAP1] = constrain( HS::cvmapping[config_cursor-CVMAP1] + dir, 0, CVMAP_MAX);
+            if (!EditSelectedInputMap(dir))
+              HS::cvmap[config_cursor-CVMAP1].ChangeSource(dir);
             break;
         case TRIG_LENGTH:
             HS::trig_length = (uint32_t) constrain( int(HS::trig_length + dir), 1, 127);
@@ -1263,14 +1248,22 @@ private:
             HS::QuantizerEdit(config_cursor - QUANT1);
             break;
 
-        case TRIGMAP1:
-        case TRIGMAP2:
-        case TRIGMAP3:
-        case TRIGMAP4:
         case CVMAP1:
         case CVMAP2:
         case CVMAP3:
         case CVMAP4:
+          if (CheckEditInputMapPress(
+                config_cursor,
+                IndexedInput(CVMAP1, cvmap[0]),
+                IndexedInput(CVMAP2, cvmap[1]),
+                IndexedInput(CVMAP3, cvmap[2]),
+                IndexedInput(CVMAP4, cvmap[3])
+              ))
+            break;
+        case TRIGMAP1:
+        case TRIGMAP2:
+        case TRIGMAP3:
+        case TRIGMAP4:
         case TRIG_LENGTH:
         case MIDI_PC_CHANNEL:
         default:
@@ -1278,7 +1271,7 @@ private:
             break;
 
         case SCREENSAVER_MODE:
-            ++HS::screensaver_mode %= 4;
+            ++HS::screensaver_mode %= SCREENSAVER_MODE_COUNT;
             break;
 
         case CURSOR_MODE:
@@ -1310,10 +1303,10 @@ private:
 
         for (int ch=0; ch<4; ++ch) {
           // Physical trigger input mappings
-          gfxPrint(4 + ch*32, 25, OC::Strings::trigger_input_names_none[ HS::trigger_mapping[ch] ] );
+          gfxPrint(4 + ch*32, 25, HS::trigmap[ch].InputName() );
 
           // Physical CV input mappings
-          gfxPrint(4 + ch*32, 45, OC::Strings::cv_input_names_none[ HS::cvmapping[ch] ] );
+          gfxPrint(4 + ch*32, 45, HS::cvmap[ch].InputName() );
         }
 
         gfxLine(64, 11, 64, 63);
@@ -1333,6 +1326,7 @@ private:
           break;
         }
 
+        gfxDisplayInputMapEditor();
     }
 
     void DrawQuantizerConfig() {
@@ -1349,18 +1343,17 @@ private:
 
           const bool upper = config_cursor < QUANT5;
           const int ch_view = upper ? ch : ch + 4;
+          auto &q = q_engine[ch_view];
 
           gfxIcon(x + 3, upper? 25 : 45, upper? UP_BTN_ICON : DOWN_BTN_ICON);
 
           // Scale
-          gfxPrint(x - 3, 30, OC::scale_names_short[ HS::quant_scale[ch_view] ]);
+          gfxPrint(x - 3, 30, OC::scale_names_short[ q.scale ]);
 
           // Root Note + Octave
-          gfxPrint(x - 3, 40, OC::Strings::note_names[ HS::root_note[ch_view] ]);
-          if (HS::q_octave[ch_view] >= 0) gfxPrint("+");
-          gfxPrint(HS::q_octave[ch_view]);
-
-          // (TODO: mask editor)
+          gfxPrint(x - 3, 40, OC::Strings::note_names[ q.root_note ]);
+          if (q.octave >= 0) gfxPrint("+");
+          gfxPrint(q.octave);
 
           // 5-8 on bottom
           gfxPrint(x, 55, "Q");
@@ -1393,13 +1386,6 @@ private:
         gfxPrint(HS::trig_length);
         gfxPrint("ms");
 
-        const char * const ssmodes[4] = { "[blank]", "Meters", "Scope",
-        #if defined(__IMXRT1062__)
-        "Stars"
-        #else
-        "Zips"
-        #endif
-        };
         gfxPrint(1, 25, "Screensaver:  ");
         gfxPrint( ssmodes[HS::screensaver_mode] );
 
@@ -1498,7 +1484,7 @@ private:
 #ifdef __IMXRT1062__
 #else
 // TOTAL EEPROM SIZE: 8 presets * 32 bytes
-SETTINGS_DECLARE(HemispherePreset, HEMISPHERE_SETTING_LAST) {
+SETTINGS_DECLARE(HemispherePreset, HEMISPHERE_SETTINGS_COUNT) {
     {0, 0, 255, "Applet ID L", NULL, settings::STORAGE_TYPE_U8},
     {0, 0, 255, "Applet ID R", NULL, settings::STORAGE_TYPE_U8},
     {0, 0, 65535, "Data L block 1", NULL, settings::STORAGE_TYPE_U16},
@@ -1561,7 +1547,7 @@ static size_t HEMISPHERE_save(void *storage) {
     hem_presets[HEM_NR_OF_PRESETS].SetGlobals(HS::frame.MIDIState.pc_channel);
 
     size_t used = 0;
-    for (int i = 0; i <= HEM_NR_OF_PRESETS; ++i) {
+    for (int i = 0; i < HEM_NR_OF_PRESETS + 1; ++i) {
         used += hem_presets[i].Save(static_cast<char*>(storage) + used);
     }
     return used;
@@ -1573,7 +1559,7 @@ static size_t HEMISPHERE_restore(const void *storage) {
     return 0;
 #else
     size_t used = 0;
-    for (int i = 0; i <= HEM_NR_OF_PRESETS; ++i) {
+    for (int i = 0; i < HEM_NR_OF_PRESETS + 1; ++i) {
         used += hem_presets[i].Restore(static_cast<const char*>(storage) + used);
     }
 
@@ -1581,7 +1567,7 @@ static size_t HEMISPHERE_restore(const void *storage) {
     HS::hidden_applets[1] = hem_presets[HEM_NR_OF_PRESETS].GetData(HEM_SIDE(1));
 
     HS::frame.MIDIState.pc_channel =
-      constrain(hem_presets[HEM_NR_OF_PRESETS].GetGlobals(), 0, 17);
+      constrain((int)hem_presets[HEM_NR_OF_PRESETS].GetGlobals(), 0, 17);
 
     return used;
 #endif
@@ -1614,14 +1600,15 @@ void HEMISPHERE_menu() {
 
 void HEMISPHERE_screensaver() {
     switch (HS::screensaver_mode) {
-    case 0x3: // Zips or Stars
-        ZapScreensaver(true);
+    case SCREEN_ZIPS:
+    case SCREEN_STARS:
+    case SCREEN_ZAPS:
+        ZapScreensaver(screensaver_mode - SCREEN_ZAPS);
         break;
-    case 0x2: // output scope
-        //ZapScreensaver();
+    case SCREEN_SCOPE: // output scope
         OC::scope_render();
         break;
-    case 0x1: // Meters
+    case SCREEN_METERS: // Meters
         manager.BaseScreensaver(true); // show note names
         break;
     default: break; // blank screen

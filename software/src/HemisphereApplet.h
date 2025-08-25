@@ -44,6 +44,8 @@
 
 #include "HSUtils.h"
 #include "HSIOFrame.h"
+#include <cstdint>
+#include <variant>
 
 class HemisphereApplet;
 
@@ -58,8 +60,6 @@ struct Applet {
 struct EncoderEditor {
   bool isEditing;
 };
-
-extern IOFrame frame;
 
 static constexpr bool ALWAYS_SHOW_ICONS = false;
 } // namespace HS
@@ -96,79 +96,15 @@ public:
     virtual void OnDataReceive(uint64_t data) = 0;
     virtual void OnButtonPress() { CursorToggle(); };
     virtual void OnEncoderMove(int direction) = 0;
+    virtual void Unload() { }
+    virtual void DrawFullScreen() { View(); }
+    virtual void AuxButton() { CancelEdit(); }
 
     void BaseView(bool full_screen = false, bool parked = true);
+    void BaseStart(const HEM_SIDE hemisphere_);
 
-    void BaseStart(const HEM_SIDE hemisphere_) {
-        SetDisplaySide(hemisphere_);
-        ResetCursor();
-        CancelEdit();
-
-        // Maintain previous app state by skipping Start
-        if (!applet_started) {
-            applet_started = true;
-            Start();
-            ForEachChannel(ch) {
-                Out(ch, 0); // reset outputs
-            }
-        }
-    }
-    virtual void Unload() { }
-
-    // Screensavers are deprecated in favor of screen blanking, but the BaseScreensaverView() remains
-    // to avoid breaking applets based on the old boilerplate
-    void BaseScreensaverView() {}
-
-    virtual void DrawFullScreen() { View(); }
     /* Formerly Help Screen */
-    void DrawConfigHelp() {
-        for (int i=0; i<HELP_LABEL_COUNT; ++i) help[i] = "";
-        SetHelp();
-        const bool clockrun = HS::clock_m.IsRunning();
-
-        for (int ch = 0; ch < 2; ++ch) {
-          int y = 14;
-          const int mult = clockrun ? HS::clock_m.GetMultiply(ch + io_offset) : 0;
-
-          graphics.setPrintPos(ch*64, y);
-          if (mult != 0) { // Multipliers
-            graphics.print( (mult > 0) ? "x" : "/" );
-            graphics.print( (mult > 0) ? mult : 1 - mult );
-          } else { // Trigger mapping
-            graphics.print( OC::Strings::trigger_input_names_none[ HS::trigger_mapping[ch + io_offset] ] );
-          }
-          graphics.invertRect(ch*64, y - 1, 19, 9);
-
-          graphics.setPrintPos(ch*64 + 20, y);
-          graphics.print( help[HELP_DIGITAL1 + ch] );
-
-          y += 10;
-
-          graphics.setPrintPos(ch*64, y);
-          graphics.print( OC::Strings::cv_input_names_none[ HS::cvmapping[ch + io_offset] ] );
-          graphics.invertRect(ch*64, y - 1, 19, 9);
-
-          graphics.setPrintPos(ch*64 + 20, y);
-          graphics.print( help[HELP_CV1 + ch] );
-
-          y += 10;
-
-          graphics.setPrintPos(6 + ch*64, y);
-          graphics.print( OC::Strings::capital_letters[ ch + io_offset ] );
-          graphics.invertRect(ch*64, y - 1, 19, 9);
-
-          graphics.setPrintPos(ch*64 + 20, y);
-          graphics.print( help[HELP_OUT1 + ch] );
-        }
-
-        graphics.setPrintPos(0, 45);
-        graphics.print( help[HELP_EXTRA1] );
-        graphics.setPrintPos(0, 55);
-        graphics.print( help[HELP_EXTRA2] );
-    }
-    virtual void AuxButton() {
-      CancelEdit();
-    }
+    void DrawConfigHelp();
 
     /* Check cursor blink cycle. */
     bool CursorBlink() { return (cursor_countdown[hemisphere] > 0); }
@@ -204,46 +140,43 @@ public:
     }
     bool Changed(int ch) {return frame.changed_cv[io_offset + ch];}
 
-    //////////////// Offset I/O methods
-    ////////////////////////////////////////////////////////////////////////////////
+    // --- CV Input Methods
     int In(const int ch) {
-        const int c = cvmapping[ch + io_offset];
-        if (!c) return 0;
-        return (c <= ADC_CHANNEL_LAST) ? frame.inputs[c - 1] : frame.outputs[c - 1 - ADC_CHANNEL_LAST];
+      return cvmap[ch + io_offset].In();
     }
 
-    #ifdef ARDUINO_TEENSY41
+#ifdef __IMXRT1062__
     float InF(int ch) {
         return static_cast<float>(In(ch)) / HEMISPHERE_MAX_INPUT_CV;
     }
-    #endif
+#endif
 
     // Apply small center detent to input, so it reads zero before a threshold
     int DetentedIn(int ch) {
-        return (In(ch) > (HEMISPHERE_CENTER_CV + HEMISPHERE_CENTER_DETENT) || In(ch) < (HEMISPHERE_CENTER_CV - HEMISPHERE_CENTER_DETENT))
-            ? In(ch) : HEMISPHERE_CENTER_CV;
-    }
-    int SmoothedIn(int ch) {
-      const int x = cvmapping[ch + io_offset];
-      if (x && x <= ADC_CHANNEL_LAST) {
-        ADC_CHANNEL channel = (ADC_CHANNEL)( x - 1 );
-        return OC::ADC::value(channel);
-      }
-      return 0;
+        if (NorthernLightModular && In(ch) < HEMISPHERE_CENTER_DETENT)
+          return 0;
+
+        if (In(ch) > (HEMISPHERE_CENTER_INPUT_CV + HEMISPHERE_CENTER_DETENT)
+          || In(ch) < (HEMISPHERE_CENTER_INPUT_CV - HEMISPHERE_CENTER_DETENT))
+          return In(ch);
+
+        return HEMISPHERE_CENTER_INPUT_CV;
     }
     int SemitoneIn(int ch) {
-      return input_quant[ch].Process(In(ch));
+      return input_quant[ch + io_offset].Process(In(ch));
     }
 
-    // defined in HemisphereApplet.cpp
-    bool Clock(int ch, bool physical = 0);
-
+    /* Has the specified Digital input been clocked this cycle? (rising edge of a gate)
+     * This is pre-calculated in HS::IOFrame::Load() according to input mappings and internal clock settings
+     */
+    bool Clock(int ch, bool physical = 0) {
+        return frame.clocked[ch + io_offset];
+    }
     bool Gate(int ch) {
-        const int t = trigger_mapping[ch + io_offset];
-        const int offset = OC::DIGITAL_INPUT_LAST + ADC_CHANNEL_LAST;
-        if (!t) return false;
-        return (t <= offset) ? frame.gate_high[t - 1] : (frame.outputs[t - 1 - offset] > GATE_THRESHOLD);
+        return trigmap[ch + io_offset].Gate();
     }
+
+    // --- CV Output methods
     void Out(int ch, int value, int octave = 0) {
         frame.Out( (DAC_CHANNEL)(ch + io_offset), value + (octave * (12 << 7)));
     }
@@ -258,17 +191,13 @@ public:
     void ClockOut(const int ch, const int ticks = HEMISPHERE_CLOCK_TICKS * trig_length) {
         frame.ClockOut( (DAC_CHANNEL)(io_offset + ch), ticks);
     }
-
     void GateOut(int ch, bool high) {
         Out(ch, 0, (high ? PULSE_VOLTAGE : 0));
     }
 
     // Quantizer helpers
-    braids::Quantizer* GetQuantizer(int ch) {
-      return &HS::quantizer[io_offset + ch];
-    }
     int GetLatestNoteNumber(int ch) {
-      return HS::quantizer[io_offset + ch].GetLatestNoteNumber();
+      return HS::GetLatestNoteNumber(ch);
     }
     int Quantize(int ch, int cv, int root = 0, int transpose = 0) {
       return HS::Quantize(ch + io_offset, cv, root, transpose);
@@ -276,21 +205,21 @@ public:
     int QuantizerLookup(int ch, int note) {
       return HS::QuantizerLookup(ch + io_offset, note);
     }
+    void QuantizerConfigure(int ch, int scale, uint16_t mask = 0xffff) {
+      q_engine[ch].Configure(scale, mask);
+    }
     void SetScale(int ch, int scale) {
       QuantizerConfigure(ch, scale);
     }
-    void QuantizerConfigure(int ch, int scale, uint16_t mask = 0xffff) {
-      HS::QuantizerConfigure(ch + io_offset, scale, mask);
-    }
     int GetScale(int ch) {
-      return HS::quant_scale[io_offset + ch];
+      return q_engine[io_offset + ch].scale;
     }
     int GetRootNote(int ch) {
-      return HS::root_note[io_offset + ch];
+      return q_engine[io_offset + ch].root_note;
     }
     int SetRootNote(int ch, int root) {
       CONSTRAIN(root, 0, 11);
-      return (HS::root_note[io_offset + ch] = root);
+      return (q_engine[io_offset + ch].root_note = root);
     }
     void NudgeScale(int ch, int dir) {
       HS::NudgeScale(ch + io_offset, dir);
@@ -311,8 +240,8 @@ public:
 
     // Override HSUtils function to only return positive values
     // Not ideal, but too many applets rely on this.
-    constexpr int ProportionCV(const int cv_value, const int max_pixels) {
-        int prop = constrain(Proportion(cv_value, HEMISPHERE_MAX_INPUT_CV, max_pixels), 0, max_pixels);
+    const int ProportionCV(const int cv_value, const int max_pixels, const int max_cv = HEMISPHERE_MAX_CV) {
+        int prop = constrain(Proportion(cv_value, max_cv, max_pixels), 0, max_pixels);
         return prop;
     }
 
@@ -386,6 +315,17 @@ public:
         }
     }
 
+    void gfxPrint(DigitalInputMap &map) {
+      gfxPrintIcon(map.Icon());
+      if (map.Gate()) gfxInvert(gfxGetPrintPosX()-8, gfxGetPrintPosY(), 8, 8);
+    }
+    void gfxPrint(CVInputMap &map) {
+      gfxPrintIcon(map.Icon());
+      const int xpos = gfxGetPrintPosX() - 1;
+      const int ypos = gfxGetPrintPosY() + 4;
+      const int height = map.InRescaled(24);
+      gfxLine(xpos, ypos, xpos, ypos - height);
+    }
 
     void gfxStartCursor(int x, int y) {
         gfxPos(x, y);
@@ -397,12 +337,23 @@ public:
         cursor_start_y = gfxGetPrintPosY();
     }
 
-    void gfxEndCursor(bool selected) {
+    void gfxEndCursor(bool selected, bool spicy = false, const char *str = nullptr) {
         if (selected) {
+          if (str) {
+            gfxClear(cursor_start_x - 14, cursor_start_y-1, 24, 10);
+            gfxFrame(cursor_start_x - 13, cursor_start_y-1, 22, 10, spicy);
+            gfxPrint(cursor_start_x - 11, cursor_start_y+1, str);
+            if (EditMode())
+              gfxInvert(cursor_start_x - 14, cursor_start_y-1, 24, 10);
+          } else {
             int16_t w = gfxGetPrintPosX() - cursor_start_x;
             int16_t y = gfxGetPrintPosY() + 8;
             int h = y - cursor_start_y;
-            gfxCursor(cursor_start_x, y, w, h);
+            if (spicy)
+              gfxSpicyCursor(cursor_start_x, y, w, h);
+            else
+              gfxCursor(cursor_start_x, y, w, h);
+          }
         }
     }
 
@@ -522,7 +473,103 @@ public:
         hemisphere = side;
     }
 
+    bool EditInputMap(CVInputMap& input_map) {
+      if (!IsEditingInputMap()) {
+        selected_input_map = &input_map;
+        return true;
+      }
+      return false;
+    }
+
+    bool EditInputMap(DigitalInputMap& input_map) {
+      if (!IsEditingInputMap()) {
+        selected_input_map = &input_map;
+        return true;
+      }
+      return false;
+    }
+
+    void ClearEditInputMap() {
+      selected_input_map = std::monostate{};
+      if (EditMode()) CursorToggle();
+    }
+
+    bool EditSelectedInputMap(int direction) {
+      if (IsEditingInputMap()) {
+        switch (selected_input_map.index()) {
+          case CV_INPUT_MAP: {
+            int8_t& att
+              = std::get<CVInputMap*>(selected_input_map)->attenuversion;
+            att = constrain(att + direction, -127, 127); // 448% range
+            break;
+          }
+          case DIGITAL_INPUT_MAP: {
+            int8_t& div
+              = std::get<DigitalInputMap*>(selected_input_map)->division;
+            div = constrain(div + direction, -64, 64);
+            break;
+          }
+          default:
+            break;
+        }
+        return true;
+      }
+      return false;
+    }
+
+    void gfxDisplayInputMapEditor() {
+      if (selected_input_map.index()) {
+        gfxClear(0, 0, 63, 11);
+        switch (selected_input_map.index()) {
+          case CV_INPUT_MAP: {
+            gfxPos(32 - 7 * 6 / 2, 2);
+            int tenths = std::get<CVInputMap*>(selected_input_map)->Atten();
+            graphics.printf("%4d.%d%%", tenths / 10, abs(tenths) % 10);
+            break;
+          }
+          case DIGITAL_INPUT_MAP: {
+            gfxPos(32 - 4 * 6 / 2, 2);
+            int8_t div = std::get<DigitalInputMap*>(selected_input_map)->division;
+            if (div < 0) graphics.printf("/%3d", -div + 1);
+            else graphics.printf("X%3d", div + 1);
+            break;
+          }
+          default:
+            break;
+        }
+        gfxInvert(0, 0, 63, 11);
+      }
+    }
+
+    bool IsEditingInputMap() const {
+      return selected_input_map.index() > 0;
+    }
+
+    template <typename... Pairs>
+    bool CheckEditInputMapPress(int cursor, Pairs&&... indexed_input_maps) {
+      if (IsEditingInputMap()) {
+        ClearEditInputMap();
+        return !EditMode();
+      } else if (!EditMode()) {
+        return false;
+      }
+
+      return (
+        ...
+        || (cursor == indexed_input_maps.first ? EditInputMap(indexed_input_maps.second) : false)
+      );
+    }
+
 protected:
+    enum SelectedInputMapType {
+      NONE,
+      CV_INPUT_MAP,
+      DIGITAL_INPUT_MAP,
+    };
+
+    std::variant<std::monostate, CVInputMap*, DigitalInputMap*>
+      selected_input_map;
+
     HEM_SIDE hemisphere; // Which hemisphere (0, 1, ...) this applet uses
     virtual void SetHelp() = 0;
 
@@ -545,8 +592,8 @@ protected:
      *     // etc...
      * }
      */
-    void StartADCLag(size_t ch = 0) {
-        frame.adc_lag_countdown[io_offset + ch] = HEMISPHERE_ADC_LAG;
+    void StartADCLag(size_t ch = 0, int lag_ticks = HEMISPHERE_ADC_LAG) {
+        frame.adc_lag_countdown[io_offset + ch] = lag_ticks;
     }
 
     bool EndOfADCLag(size_t ch = 0) {

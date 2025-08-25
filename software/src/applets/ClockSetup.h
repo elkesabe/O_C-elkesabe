@@ -60,11 +60,13 @@ public:
     // The ClockSetup controller handles MIDI Clock and Transport Start/Stop
     void Controller() {
         bool clock_sync = OC::DigitalInputs::clocked<OC::DIGITAL_INPUT_1>();
+        bool midi_sync = false;
 
         // MIDI Clock is filtered to 2 PPQN
         if (frame.MIDIState.clock_q) {
             frame.MIDIState.clock_q = 0;
             clock_sync = 1;
+            midi_sync = 1;
         }
         if (frame.MIDIState.start_q) {
             frame.MIDIState.start_q = 0;
@@ -89,7 +91,7 @@ public:
 
         // Advance internal clock, sync to external clock / reset
         if (clock_m.IsRunning())
-            clock_m.SyncTrig( clock_sync );
+            clock_m.SyncTrig( clock_sync, midi_sync );
 
         // ------------ //
         if (clock_m.IsRunning() && clock_m.MIDITock()) {
@@ -179,7 +181,7 @@ public:
         case TRIG2:
         case TRIG3:
         case TRIG4:
-            HS::trigger_mapping[cursor-TRIG1] = constrain( HS::trigger_mapping[cursor-TRIG1] + direction, 0, TRIGMAP_MAX);
+            HS::trigmap[cursor-TRIG1].ChangeSource(direction);
             break;
 
         case OUTSKIP1:
@@ -239,6 +241,8 @@ public:
         }
         Pack(data, PackLocation { 40, 5 }, clock_m.GetClockPPQN());
 
+        Pack(data, PackLocation { 45, 4 }, HS::screensaver_mode);
+
         return data;
     }
 
@@ -250,6 +254,8 @@ public:
             clock_m.SetMultiply(Unpack(data, PackLocation { 16+i*6, 6 })-32, i);
         }
         clock_m.SetClockPPQN(Unpack(data, PackLocation { 40, 5 }));
+
+        HS::screensaver_mode = Unpack(data, PackLocation { 45, 4 });
     }
 
     uint64_t GetGlobals() {
@@ -257,7 +263,7 @@ public:
         // only the first 16 bits are actually stored on T3.2
         Pack(data, PackLocation { 0, 1 }, HS::auto_save_enabled);
         Pack(data, PackLocation { 1, 1 }, HS::cursor_wrap);
-        Pack(data, PackLocation { 2, 2 }, HS::screensaver_mode);
+        //Pack(data, PackLocation { 2, 2 }, HS::screensaver_mode);
         Pack(data, PackLocation { 4, 7 }, HS::trig_length);
 
 #ifdef VOR
@@ -272,7 +278,7 @@ public:
     void SetGlobals(const uint64_t &data) {
         HS::auto_save_enabled = Unpack(data, PackLocation { 0, 1 });
         HS::cursor_wrap = Unpack(data, PackLocation { 1, 1 });
-        HS::screensaver_mode = Unpack(data, PackLocation { 2, 2 });
+        //HS::screensaver_mode = Unpack(data, PackLocation { 2, 2 });
         HS::trig_length = constrain( Unpack(data, PackLocation { 4, 7 }), 1, 127);
 
 #ifdef VOR
@@ -385,7 +391,7 @@ private:
         for (int ch=0; ch<4; ++ch) {
             const int x = ch * 32;
             // Physical trigger input mappings
-            gfxPrint(1 + x, y, OC::Strings::trigger_input_names_none[ HS::trigger_mapping[ch] ] );
+            gfxPrint(1 + x, y, HS::trigmap[ch].InputName() );
             // Manual trigger buttons
             gfxIcon(4 + x, y + 10, (button_ticker && ch == cursor-BOOP1)?BTN_ON_ICON:BTN_OFF_ICON);
         }

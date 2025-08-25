@@ -51,14 +51,8 @@ enum UiControl {
 };
 
 // Runtime aliases for UI remapping
-#if defined(NLM_hOC) || defined(NLM_cardOC)
-// hack to swap Hemisphere left/right just for hOC/cOC
-const UiControl CONTROL_BUTTON_A = CONTROL_BUTTON_DOWN;
-const UiControl CONTROL_BUTTON_B = CONTROL_BUTTON_UP;
-#else
 const UiControl CONTROL_BUTTON_A = CONTROL_BUTTON_UP;
 const UiControl CONTROL_BUTTON_B = CONTROL_BUTTON_DOWN;
-#endif
 const UiControl CONTROL_BUTTON_X = CONTROL_BUTTON_UP2;
 const UiControl CONTROL_BUTTON_Y = CONTROL_BUTTON_DOWN2;
 const UiControl CONTROL_BUTTON_Z = CONTROL_BUTTON_M;
@@ -86,7 +80,7 @@ public:
   UiMode Splashscreen(bool &reset_settings);
   bool ConfirmReset();
   void DebugStats();
-  void AppSettings();
+  bool AppSettings(bool drawmenu);
   UiMode DispatchEvents(const OC::App *app);
 
   void Poll();
@@ -138,6 +132,10 @@ public:
 
   void set_screensaver_timeout(uint32_t seconds);
 
+  void JumpToMenu() {
+    jump_to_menu_ = true;
+  }
+
 private:
 
   uint32_t ticks_;
@@ -149,6 +147,7 @@ private:
   uint16_t button_ignore_mask_;
   bool screensaver_;
   bool preempt_screensaver_;
+  bool jump_to_menu_;
 
   /* Reverse the left and right encoders if Hemisphere Suite is installed on the left-hand
    * side of a Northern Light 2OC 4U module.

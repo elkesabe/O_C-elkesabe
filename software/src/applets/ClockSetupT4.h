@@ -67,11 +67,13 @@ public:
     // The ClockSetup controller handles MIDI Clock and Transport Start/Stop
     void Controller() {
         bool clock_sync = OC::DigitalInputs::clocked<OC::DIGITAL_INPUT_1>();
+        bool midi_sync = false;
 
         // MIDI Clock is filtered to 2 PPQN
         if (frame.MIDIState.clock_q) {
             frame.MIDIState.clock_q = 0;
             clock_sync = 1;
+            midi_sync = 1;
         }
         if (frame.MIDIState.start_q) {
             frame.MIDIState.start_q = 0;
@@ -96,7 +98,7 @@ public:
 
         // Advance internal clock, sync to external clock / reset
         if (HS::clock_m.IsRunning())
-            HS::clock_m.SyncTrig( clock_sync );
+            HS::clock_m.SyncTrig( clock_sync, midi_sync );
 
         // ------------ //
         if (HS::clock_m.IsRunning() && HS::clock_m.MIDITock()) {
@@ -189,7 +191,7 @@ public:
         case TRIG6:
         case TRIG7:
         case TRIG8:
-            HS::trigger_mapping[cursor-TRIG1] = constrain( HS::trigger_mapping[cursor-TRIG1] + direction, 0, TRIGMAP_MAX);
+            HS::trigmap[cursor-TRIG1].ChangeSource(direction);
             break;
 
         /* the boops shall return in a hidden form
@@ -278,7 +280,8 @@ public:
         Pack(data, PackLocation { 4, 7 }, HS::trig_length);
         Pack(data, PackLocation { 11, 5 }, HS::clock_m.GetClockPPQN());
         Pack(data, PackLocation { 16, 1 }, (HS::clock_m.IsRunning() || HS::clock_m.IsPaused()));
-        Pack(data, PackLocation { 17, 3 }, HS::screensaver_mode);
+        //Pack(data, PackLocation { 17, 3 }, HS::screensaver_mode); // old spot
+        Pack(data, PackLocation { 20, 4 }, HS::screensaver_mode);
         // 45 bits free
         return data;
     }
@@ -290,7 +293,8 @@ public:
         HS::clock_m.SetClockPPQN(Unpack(data, PackLocation { 11, 5 }));
         if (Unpack(data, PackLocation{16, 1}) && !HS::clock_m.IsRunning())
           HS::clock_m.Start(true);
-        HS::screensaver_mode = Unpack(data, PackLocation { 17, 3 });
+        HS::screensaver_mode = Unpack(data, PackLocation { 17, 3 }) // backward compat
+                             + Unpack(data, PackLocation { 20, 4 });
     }
 
 protected:
@@ -401,7 +405,7 @@ private:
             if (ch == 4) y += 10;
 
             // Physical trigger input mappings
-            gfxPrint(1 + x, y, OC::Strings::trigger_input_names_none[ HS::trigger_mapping[ch] ] );
+            gfxPrint(1 + x, y, HS::trigmap[ch].InputName() );
 
             // Trigger indicators
             gfxIcon(23 + x, y, DOWN_BTN_ICON);

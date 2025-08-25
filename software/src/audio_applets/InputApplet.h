@@ -55,11 +55,6 @@ public:
       gfxPrint(10, 25, "Mix? ");
       gfxPrint(10, 35, mixtomono ? "Mono" : "Stereo");
       if (cursor == CHANNEL_MODE) gfxCursor(10, 43, 37);
-
-      if (peakmeter[1].available()) {
-        int peaklvl = peakmeter[1].read() * 64;
-        gfxInvert(61, 64 - peaklvl, 3, peaklvl);
-      }
     } else {
       if (cursor == CHANNEL_MODE) gfxCursor(3, 23, 31);
     }
@@ -67,26 +62,38 @@ public:
     gfxPrintDb(level);
     if (cursor == IN_LEVEL) gfxCursor(26, 53, 26);
     gfxStartCursor();
-    gfxPrintIcon(level_cv.Icon());
-    gfxEndCursor(cursor == LEVEL_CV);
+    gfxPrint(level_cv);
+    gfxEndCursor(cursor == LEVEL_CV, false, level_cv.InputName());
 
-    if (peakmeter[0].available()) {
-      int peaklvl = peakmeter[0].read() * 64;
-      gfxInvert(0, 64 - peaklvl, 3, peaklvl);
+    for (int ch = 0; ch < Channels; ++ch) {
+      if (peakmeter[ch].available()) {
+        int peaklvl = peakmeter[ch].read() * 64;
+        gfxInvert(ch*61, 64 - peaklvl, 3, peaklvl);
+      }
     }
+
+    gfxDisplayInputMapEditor();
   }
   uint64_t OnDataRequest() override {
-    return PackPackables(pack<4>(mono_mode), pack(level), pack<1>(mixtomono));
+    return PackPackables(pack<4>(mono_mode), pack(level), pack<1>(mixtomono), level_cv);
   }
   void OnDataReceive(uint64_t data) override {
-    UnpackPackables(data, pack<4>(mono_mode), pack(level), pack<1>(mixtomono));
+    UnpackPackables(data, pack<4>(mono_mode), pack(level), pack<1>(mixtomono), level_cv);
   }
 
+  // *****
+  void OnButtonPress() override {
+    if (CheckEditInputMapPress(cursor, IndexedInput(LEVEL_CV, level_cv)))
+      return;
+    CursorToggle();
+  }
+  // *****
   void OnEncoderMove(int direction) override {
     if (!EditMode()) {
       MoveCursor(cursor, direction, MAX_CURSOR);
       return;
     }
+    if (EditSelectedInputMap(direction)) return;
     switch (cursor) {
       case IN_LEVEL:
         level = constrain(level + direction, LVL_MIN_DB - 1, LVL_MAX_DB);

@@ -50,10 +50,10 @@ public:
     if (level_cv.source) {
       vca.bias(0.0f);
       vca.level(gain);
-      vca_cv.Push(float_to_q15(dbToScalar(LVL_MIN_DB * (1.0f - level_cv.InF())))
+      vca_cv.Push(float_to_q15(dbToScalar(-48 * (1.0f - level_cv.InF())))
       );
     } else {
-      vca.bias(dbToScalar(level));
+      vca.bias(gain);
       vca.level(0.0f);
     }
     // There's a good chance of phase correlation if the incoming signal is
@@ -73,8 +73,8 @@ public:
       gfxEndCursor(cursor == PW);
 
       gfxStartCursor();
-      gfxPrintIcon(pw_cv.Icon());
-      gfxEndCursor(cursor == PW_CV);
+      gfxPrint(pw_cv);
+      gfxEndCursor(cursor == PW_CV, false, pw_cv.InputName());
     }
 
     gfxStartCursor(1, 25);
@@ -85,8 +85,8 @@ public:
     gfxEndCursor(cursor == PITCH);
 
     gfxStartCursor();
-    gfxPrintIcon(pitch_cv.Icon());
-    gfxEndCursor(cursor == PITCH_CV);
+    gfxPrint(pitch_cv);
+    gfxEndCursor(cursor == PITCH_CV, false, pitch_cv.InputName());
 
     gfxStartCursor(1, 35);
     gfxPrint(MOD_TYPE_NAMES[mod_type]);
@@ -98,8 +98,8 @@ public:
     gfxEndCursor(cursor == MOD_DEPTH);
 
     gfxStartCursor();
-    gfxPrintIcon(mod_cv.Icon());
-    gfxEndCursor(cursor == MOD_CV);
+    gfxPrint(mod_cv);
+    gfxEndCursor(cursor == MOD_CV, false, mod_cv.InputName());
 
     gfxPrint(1, 45, "Lvl:");
     gfxStartCursor();
@@ -107,8 +107,8 @@ public:
     gfxEndCursor(cursor == LEVEL);
 
     gfxStartCursor();
-    gfxPrintIcon(level_cv.Icon());
-    gfxEndCursor(cursor == LEVEL_CV);
+    gfxPrint(level_cv);
+    gfxEndCursor(cursor == LEVEL_CV, false, level_cv.InputName());
 
     gfxPrint(1, 55, "Mix: ");
     gfxStartCursor();
@@ -116,8 +116,8 @@ public:
     gfxEndCursor(cursor == MIX);
 
     gfxStartCursor();
-    gfxPrintIcon(mix_cv.Icon());
-    gfxEndCursor(cursor == MIX_CV);
+    gfxPrint(mix_cv);
+    gfxEndCursor(cursor == MIX_CV, false, mix_cv.InputName());
 
     gfxDisplayInputMapEditor();
   }
@@ -141,8 +141,12 @@ public:
   }
 
   void OnButtonPress() override {
-    if (CheckEditInputMapPress(
-          cursor, IndexedInput(PW_CV, pw_cv), IndexedInput(MIX_CV, mix_cv)
+    if (CheckEditInputMapPress(cursor,
+          IndexedInput(PITCH_CV, pitch_cv),
+          IndexedInput(PW_CV, pw_cv),
+          IndexedInput(MIX_CV, mix_cv),
+          IndexedInput(MOD_CV, mod_cv),
+          IndexedInput(LEVEL_CV, level_cv)
         ))
       return;
     CursorToggle();

@@ -36,14 +36,16 @@ public:
     ONE_POLE(lp, in, 0.001f);
 
     if (ac_couple) in -= lp;
-    interp_stream.Push(Clip16(gain_cv.InF(1.0f) * dbToScalar(gain) * scalar * in));
+
+    const float scalar = -31267.0f / HEMISPHERE_MAX_CV;
+    interp_stream.Push(Clip16((gain_cv.InF(0.0f) + dbToScalar(gain)) * scalar * in));
   }
 
   void View() override {
     gfxPrint(1, 15, "Source:");
     gfxStartCursor();
-    gfxPrintIcon(input.Icon());
-    gfxEndCursor(cursor == 0);
+    gfxPrint(input);
+    gfxEndCursor(cursor == 0, false, input.InputName());
 
     gfxPrint(1, 25, "Interp:");
     gfxStartCursor();
@@ -66,16 +68,24 @@ public:
     gfxPrintDb(gain);
     gfxEndCursor(cursor == 2);
     gfxStartCursor();
-    gfxPrintIcon(gain_cv.Icon());
-    gfxEndCursor(cursor == 3);
+    gfxPrint(gain_cv);
+    gfxEndCursor(cursor == 3, false, gain_cv.InputName());
 
     gfxPrint(1, 45, "AC:    ");
     gfxStartCursor();
     gfxPrintIcon(ac_couple ? CHECK_ON_ICON : CHECK_OFF_ICON);
     gfxEndCursor(cursor == 4);
+
+    gfxDisplayInputMapEditor();
   }
 
   void OnButtonPress() override {
+    if (CheckEditInputMapPress(
+          cursor,
+          IndexedInput(0, input),
+          IndexedInput(3, gain_cv)
+    )) return;
+
     if (cursor == 4) {
       ac_couple = !ac_couple;
     } else {
@@ -88,6 +98,7 @@ public:
       MoveCursor(cursor, direction, 4);
       return;
     }
+    if(EditSelectedInputMap(direction)) return;
 
     switch (cursor) {
       case 0:
@@ -138,7 +149,6 @@ private:
   AudioConnection interp_conn[Channels];
   AudioConnection out_conn[Channels];
 
-  static constexpr float scalar = -31267.0f / HEMISPHERE_MAX_CV;
   float lp = 0.0f;
   int cursor = 0;
   CVInputMap input;

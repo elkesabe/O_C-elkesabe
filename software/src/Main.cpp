@@ -126,23 +126,7 @@ void setup() {
 
   #if defined(ARDUINO_TEENSY41)
   OC::Pinout_Detect();
-  SDcard_Ready = SD.begin(BUILTIN_SDCARD);
-  // Standard MIDI I/O on Serial8, only for Teensy 4.1
-  if (MIDI_Uses_Serial8) {
-    Serial8.begin(31250);
-    MIDI1.begin(MIDI_CHANNEL_OMNI);
-  }
-
-  if (I2S2_Audio_ADC && I2S2_Audio_DAC) {
-    OC::AudioIO::Init();
-  }
   #endif
-
-  // initialize LittleFS for config files
-  PhzConfig::setup();
-
-  // USB Host support for both 4.0 and 4.1
-  usbHostMIDI.begin();
 #endif
 #if defined(__MK20DX256__)
   NVIC_SET_PRIORITY(IRQ_PORTB, 0); // TR1 = 0 = PTB16
@@ -168,10 +152,6 @@ void setup() {
     delay(400);
 #if defined(__IMXRT1062__) && defined(ARDUINO_TEENSY41)
   }
-
-  if (OLED_Uses_SPI1) {
-    SPI1.begin();
-  }
 #endif
 
   OC::calibration_load();
@@ -190,7 +170,6 @@ void setup() {
   GRAPHICS_BEGIN_FRAME(true);
   GRAPHICS_END_FRAME();
 
-  OC::menu::Init();
   OC::ui.Init();
   OC::ui.configure_encoders(OC::calibration_data.encoder_config());
 
@@ -202,6 +181,36 @@ void setup() {
   SERIAL_PRINTLN("* UI ISR @%luus", OC_UI_TIMER_RATE);
   UI_timer.begin(UI_timer_ISR, OC_UI_TIMER_RATE);
   UI_timer.priority(OC_UI_TIMER_PRIO);
+#endif
+
+  // first sign of life
+  GRAPHICS_BEGIN_FRAME(true);
+  graphics.setPrintPos(1, 28);
+  graphics.print("*Main Screen Turn On*");
+  GRAPHICS_END_FRAME();
+
+  // --- more hardware init
+#ifdef __IMXRT1062__
+  #if defined(ARDUINO_TEENSY41)
+  // this takes a couple seconds to timeout if no card
+  SDcard_Ready = SD.begin(BUILTIN_SDCARD);
+
+  // Standard MIDI I/O on Serial8, only for Teensy 4.1
+  if (MIDI_Uses_Serial8) {
+    Serial8.begin(31250);
+    MIDI1.begin(MIDI_CHANNEL_OMNI);
+  }
+
+  if (I2S2_Audio_ADC && I2S2_Audio_DAC) {
+    OC::AudioIO::Init();
+  }
+  #endif
+
+  // initialize LittleFS for config files
+  PhzConfig::setup();
+
+  // USB Host support for both 4.0 and 4.1
+  usbHostMIDI.begin();
 #endif
 
   // Display splash screen and optional calibration
@@ -237,16 +246,16 @@ void FASTRUN loop() {
   uint32_t menu_redraws = 0;
   while (true) {
 
-    // don't change current_app while it's running
-    if (OC::UI_MODE_APP_SETTINGS == ui_mode) {
-      OC::ui.AppSettings();
-      ui_mode = OC::UI_MODE_MENU;
-    }
-
     // Refresh display
     if (MENU_REDRAW && OC::CORE::display_update_enabled) {
       GRAPHICS_BEGIN_FRAME(false); // Don't busy wait
-        if (OC::UI_MODE_MENU == ui_mode) {
+
+        if (OC::UI_MODE_APP_SETTINGS == ui_mode) {
+          // Only draw the App menu here...
+          // Handle events and process state changes elsewhere.
+          OC::ui.AppSettings(true);
+
+        } else if (OC::UI_MODE_MENU == ui_mode) {
           OC_DEBUG_RESET_CYCLES(menu_redraws, 512, OC::DEBUG::MENU_draw_cycles);
           OC_DEBUG_PROFILE_SCOPE(OC::DEBUG::MENU_draw_cycles);
           OC::apps::current_app->DrawMenu();
@@ -271,15 +280,25 @@ void FASTRUN loop() {
       OC::apps::current_app->loop();
 
     // UI events
-    OC::UiMode mode = OC::ui.DispatchEvents(OC::apps::current_app);
+    if (OC::UI_MODE_APP_SETTINGS == ui_mode) {
+      if (!OC::ui.AppSettings(false)) {
+        // exit menu, resume app
+        ui_mode = OC::UI_MODE_MENU;
+      }
+    } else {
+      OC::UiMode mode = OC::ui.DispatchEvents(OC::apps::current_app);
 
-    // State transition for app
-    if (mode != ui_mode) {
-      if (OC::UI_MODE_SCREENSAVER == mode)
-        OC::apps::current_app->HandleAppEvent(OC::APP_EVENT_SCREENSAVER_ON);
-      else if (OC::UI_MODE_SCREENSAVER == ui_mode)
-        OC::apps::current_app->HandleAppEvent(OC::APP_EVENT_SCREENSAVER_OFF);
-      ui_mode = mode;
+      // State transition for app
+      if (mode != ui_mode) {
+        if (OC::UI_MODE_SCREENSAVER == mode)
+          OC::apps::current_app->HandleAppEvent(OC::APP_EVENT_SCREENSAVER_ON);
+        else if (OC::UI_MODE_SCREENSAVER == ui_mode)
+          OC::apps::current_app->HandleAppEvent(OC::APP_EVENT_SCREENSAVER_OFF);
+        else if (OC::UI_MODE_APP_SETTINGS == mode)
+          OC::apps::current_app->HandleAppEvent(OC::APP_EVENT_SUSPEND);
+
+        ui_mode = mode;
+      }
     }
 
     if (millis() - LAST_REDRAW_TIME > REDRAW_TIMEOUT_MS)

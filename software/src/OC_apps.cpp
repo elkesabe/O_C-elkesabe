@@ -86,6 +86,10 @@ namespace menu = OC::menu;
   prefix ## _isr \
 }
 
+// The order here is not inconsequential.
+// Each app's Start() method is called in sequence.
+// For example, the default quantizer settings from Hemisphere
+// are overwritten when Calibr8or loads its settings
 static constexpr OC::App available_apps[] = {
   DECLARE_APP('S','E', "Setup / About", Settings),
 
@@ -201,6 +205,9 @@ struct GlobalSettings {
 #endif
   HS::VOSegment user_waveforms[HS::VO_SEGMENT_COUNT];
   OC::Autotune_data auto_calibration_data[DAC_CHANNEL_LAST];
+
+  HS::QuantEngineSettings q_engines[QUANT_CHANNEL_COUNT];
+  HS::MIDIMapSettings midi_maps[MIDIMAP_MAX];
 #endif
 };
 
@@ -315,9 +322,9 @@ void save_global_settings() {
     PhzConfig::setValue(TURING_MACHINES_KEY | i, data);
   }
 
+  data = 0;
   // User Waveform (custom VectorOsc shapes)
   for (size_t i = 0; i < HS::VO_SEGMENT_COUNT; ++i) {
-    data = 0;
     Pack(data, PackLocation{(i & 0x3) * 16, 16}, uint16_t(HS::user_waveforms[i].level) << 8 | HS::user_waveforms[i].time);
 
     if ((i & 0x3) == 0x3) {
@@ -329,7 +336,7 @@ void save_global_settings() {
   // Auto Calibration Data
   for (size_t i = 0; i < DAC_CHANNEL_LAST; ++i) {
     data = 0;
-    PhzConfig::setValue(AUTOCAL_KEY | 0xff, auto_calibration_data[i].use_auto_calibration_);
+    PhzConfig::setValue(AUTOCAL_KEY | (0xff - i), auto_calibration_data[i].use_auto_calibration_);
 
     for (size_t oct = 0; oct < OCTAVES + 1; ++oct) {
       Pack(data, PackLocation{(oct & 0x3) * 16, 16}, auto_calibration_data[i].auto_calibrated_octaves[oct]);
@@ -353,6 +360,22 @@ void save_global_settings() {
   memcpy(global_settings.auto_calibration_data, OC::auto_calibration_data, sizeof(OC::auto_calibration_data));
   // scaling settings:
   global_settings.DAC_scaling = OC::DAC::store_scaling();
+
+  for (int i = 0; i < QUANT_CHANNEL_COUNT; ++i) {
+    global_settings.q_engines[i].scale = HS::q_engine[i].scale;
+    global_settings.q_engines[i].mask = HS::q_engine[i].mask;
+    global_settings.q_engines[i].octave = HS::q_engine[i].octave;
+    global_settings.q_engines[i].root_note = HS::q_engine[i].root_note;
+  }
+  for (int i = 0; i < MIDIMAP_MAX; ++i) {
+    global_settings.midi_maps[i].channel       = HS::frame.MIDIState.mapping[i].channel      ;
+    global_settings.midi_maps[i].dac_polyvoice = HS::frame.MIDIState.mapping[i].dac_polyvoice;
+    global_settings.midi_maps[i].function      = HS::frame.MIDIState.mapping[i].function     ;
+    global_settings.midi_maps[i].function_cc   = HS::frame.MIDIState.mapping[i].function_cc  ;
+    global_settings.midi_maps[i].transpose     = HS::frame.MIDIState.mapping[i].transpose    ;
+    global_settings.midi_maps[i].range_low     = HS::frame.MIDIState.mapping[i].range_low    ;
+    global_settings.midi_maps[i].range_high    = HS::frame.MIDIState.mapping[i].range_high   ;
+  }
 
   global_settings_storage.Save(global_settings);
   SERIAL_PRINTLN("Saved global settings: page_index %d", global_settings_storage.page_index());
@@ -490,6 +513,8 @@ void Init(bool reset_settings) {
   for (auto &app : available_apps)
     app.Init();
 
+  HS::frame.Init();
+
   global_settings.current_app_id = DEFAULT_APP_ID;
   global_settings.encoders_enable_acceleration = OC_ENCODERS_ENABLE_ACCELERATION_DEFAULT;
   global_settings.reserved0 = false;
@@ -588,14 +613,15 @@ void Init(bool reset_settings) {
           if (!PhzConfig::getValue(WAVEFORMS_KEY | (i >> 2), data))
             break;
         }
-        HS::user_waveforms[i].level = (data >> 8) & 0xff;
-        HS::user_waveforms[i].time = data & 0xff;
+        uint16_t wavedata = Unpack(data, PackLocation{(i & 0x3) * 16, 16});
+        HS::user_waveforms[i].level = (wavedata >> 8) & 0xff;
+        HS::user_waveforms[i].time = wavedata & 0xff;
       }
 
       // -- Auto Calibration Data
       for (size_t i = 0; i < DAC_CHANNEL_LAST; ++i) {
         data = 0;
-        if (!PhzConfig::getValue(AUTOCAL_KEY | 0xff, data))
+        if (!PhzConfig::getValue(AUTOCAL_KEY | (0xff - i), data))
           break;
         auto_calibration_data[i].use_auto_calibration_ = data;
         for (size_t oct = 0; oct < OCTAVES + 1; ++oct) {
@@ -634,6 +660,26 @@ void Init(bool reset_settings) {
       DAC::choose_calibration_data(); // either use default data, or auto_calibration_data
       DAC::restore_scaling(global_settings.DAC_scaling); // recover output scaling settings
       Scales::Validate();
+
+      // restore q_engines and midi_maps
+      for (int i = 0; i < QUANT_CHANNEL_COUNT; ++i) {
+        HS::q_engine[i].scale     = global_settings.q_engines[i].scale;
+        HS::q_engine[i].mask      = global_settings.q_engines[i].mask;
+        HS::q_engine[i].octave    = global_settings.q_engines[i].octave;
+        HS::q_engine[i].root_note = global_settings.q_engines[i].root_note;
+        HS::q_engine[i].Reconfig();
+      }
+      for (int i = 0; i < MIDIMAP_MAX; ++i) {
+        HS::frame.MIDIState.mapping[i].channel       = global_settings.midi_maps[i].channel      ;
+        HS::frame.MIDIState.mapping[i].dac_polyvoice = global_settings.midi_maps[i].dac_polyvoice;
+        HS::frame.MIDIState.mapping[i].function      = global_settings.midi_maps[i].function     ;
+        HS::frame.MIDIState.mapping[i].function_cc   = global_settings.midi_maps[i].function_cc  ;
+        HS::frame.MIDIState.mapping[i].transpose     = global_settings.midi_maps[i].transpose    ;
+        HS::frame.MIDIState.mapping[i].range_low     = global_settings.midi_maps[i].range_low    ;
+        HS::frame.MIDIState.mapping[i].range_high    = global_settings.midi_maps[i].range_high   ;
+      }
+      HS::frame.MIDIState.UpdateMidiChannelFilter();
+      HS::frame.MIDIState.UpdateMaxPolyphony();
     }
 #endif
 
@@ -654,7 +700,6 @@ void Init(bool reset_settings) {
   int current_app_index = apps::index_of(global_settings.current_app_id);
   if (current_app_index < 0 || current_app_index >= NUM_AVAILABLE_APPS) {
     SERIAL_PRINTLN("App id %02x not found, using default!", global_settings.current_app_id);
-    global_settings.current_app_id = DEFAULT_APP_INDEX;
     current_app_index = DEFAULT_APP_INDEX;
   }
 
@@ -669,37 +714,6 @@ void Init(bool reset_settings) {
 
 }; // namespace apps
 
-void draw_app_menu(const menu::ScreenCursor<5> &cursor) {
-  GRAPHICS_BEGIN_FRAME(true);
-
-  if (global_settings.encoders_enable_acceleration)
-    graphics.drawBitmap8(120, 1, 4, bitmap_indicator_4x8);
-
-  menu::SettingsListItem item;
-  item.x = menu::kIndentDx + 8;
-  item.y = (64 - (5 * menu::kMenuLineH)) / 2;
-
-  for (int current = cursor.first_visible();
-       current <= cursor.last_visible();
-       ++current, item.y += menu::kMenuLineH) {
-    item.selected = current == cursor.cursor_pos();
-    item.SetPrintPos();
-    graphics.movePrintPos(weegfx::kFixedFontW, 0);
-    graphics.print(available_apps[current].name);
-
-    if (global_settings.current_app_id == available_apps[current].id)
-      graphics.drawBitmap8(0, item.y + 1, 8, ZAP_ICON);
-
-    item.DrawCustom();
-  }
-
-#ifdef VOR
-  VBiasManager *vbias_m = vbias_m->get();
-  vbias_m->DrawPopupPerhaps();
-#endif
-
-  GRAPHICS_END_FRAME();
-}
 
 void draw_save_message(uint8_t c) {
   GRAPHICS_BEGIN_FRAME(true);
@@ -710,20 +724,53 @@ void draw_save_message(uint8_t c) {
   GRAPHICS_END_FRAME();
 }
 
-void Ui::AppSettings() {
+bool Ui::AppSettings(bool drawmenu) {
+  static menu::ScreenCursor<5> cursor;
+  static bool change_app = false;
+  static bool save = false;
+  static bool opened = false;
 
-  SetButtonIgnoreMask();
+  // --- state change: entering App Menu
+  if (!opened) {
+    cursor.Init(0, NUM_AVAILABLE_APPS - 1);
+    cursor.Scroll(apps::index_of(global_settings.current_app_id));
+    opened = true;
+  }
 
-  apps::current_app->HandleAppEvent(APP_EVENT_SUSPEND);
+  // View - graphics
+  if (drawmenu) {
+    // assumes this is called from within a graphics frame context
+    if (global_settings.encoders_enable_acceleration)
+      graphics.drawBitmap8(120, 1, 4, bitmap_indicator_4x8);
 
-  menu::ScreenCursor<5> cursor;
-  cursor.Init(0, NUM_AVAILABLE_APPS - 1);
-  cursor.Scroll(apps::index_of(global_settings.current_app_id));
+    menu::SettingsListItem item;
+    item.x = menu::kIndentDx + 8;
+    item.y = (64 - (5 * menu::kMenuLineH)) / 2;
 
-  bool change_app = false;
-  bool save = false;
-  while (!change_app && idle_time() < APP_SELECTION_TIMEOUT_MS) {
+    for (int current = cursor.first_visible();
+         current <= cursor.last_visible();
+         ++current, item.y += menu::kMenuLineH) {
+      item.selected = current == cursor.cursor_pos();
+      item.SetPrintPos();
+      graphics.movePrintPos(weegfx::kFixedFontW, 0);
+      graphics.print(available_apps[current].name);
 
+      if (global_settings.current_app_id == available_apps[current].id)
+        graphics.drawBitmap8(0, item.y + 1, 8, ZAP_ICON);
+
+      item.DrawCustom();
+    }
+
+#ifdef VOR
+    VBiasManager *vbias_m = vbias_m->get();
+    vbias_m->DrawPopupPerhaps();
+#endif
+
+    return true;
+  }
+
+  // UI - event handling
+  if (!change_app && idle_time() < APP_SELECTION_TIMEOUT_MS) {
     while (event_queue_.available()) {
       UI::Event event = event_queue_.PullEvent();
       if (IgnoreEvent(event))
@@ -765,13 +812,14 @@ void Ui::AppSettings() {
       }
     }
 
-    draw_app_menu(cursor);
-    delay(2); // VOR calibration hack
+    return true;
   }
-
+  // else... idle time expired, or an app was selected via UI
+  // cleanup and exit
   event_queue_.Flush();
   event_queue_.Poke();
 
+  // --- state change: exiting App menu
   CORE::app_isr_enabled = false;
   delay(1);
 
@@ -785,7 +833,9 @@ void Ui::AppSettings() {
       int cnt = 0;
       while(idle_time() < SETTINGS_SAVE_TIMEOUT_MS)
         draw_save_message((cnt++) >> 4);
+      save = false;
     }
+    change_app = false;
   }
 
   OC::ui.encoders_enable_acceleration(global_settings.encoders_enable_acceleration);
@@ -793,6 +843,9 @@ void Ui::AppSettings() {
   // Restore state
   apps::current_app->HandleAppEvent(APP_EVENT_RESUME);
   CORE::app_isr_enabled = true;
+
+  opened = false;
+  return false; // close menu
 }
 
 bool Ui::ConfirmReset() {

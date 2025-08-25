@@ -212,7 +212,13 @@ public:
         scene_presets[id].valid = PhzConfig::getValue(id << 8, data);
       }
 #endif
-      HS::Init(); // to reset input mappings
+      // reset input mappings
+      for (int i = 0; i < APPLET_SLOTS * 2; ++i) {
+        // TR1-TR4, then CV5-CV8
+        trigmap[i].source = i + 1 + (i>3)*4;
+        cvmap[i].source = i + 1;
+        clock_m.SetMultiply(0, i);
+      }
     }
 
     void Controller() {
@@ -228,6 +234,16 @@ public:
             trig_chan = 2;
         else if (Gate(3)) // TR4 - TODO: aux trigger modes, random, etc.
             trig_chan = 3;
+#ifdef ARDUINO_TEENSY41
+        else if (Gate(4)) // CV5
+            trig_chan = 4;
+        else if (Gate(5)) // CV6
+            trig_chan = 5;
+        else if (Gate(6)) // CV7
+            trig_chan = 6;
+        else if (Gate(7)) // CV8
+            trig_chan = 7;
+#endif
         // else, it's unchanged
 
         scene4seq = (In(3) > 2 * OCTAVE); // gate at CV4
@@ -305,7 +321,7 @@ public:
                     ClockOut(3);
                 continue;
             }
-            Out(ch, active_scene.values[ch]);
+            Out(ch, active_scene.values[ch] - SCENE_MIN_VAL*(OC::DAC::kOctaveZero == 0));
         }
 
         // encoder deceleration
@@ -505,6 +521,9 @@ private:
     }
 
     void DrawInterface() {
+        const int center = 63 - 4*OC::DAC::kOctaveZero;
+        const int h_ = center - 20;
+
         for (int i = 0; i < NR_OF_SCENES; ++i) {
             gfxPrint(i*SWIDTH + SWIDTH/2 - 3, 12, i+1);
         }
@@ -521,7 +540,7 @@ private:
           const int x = CHWIDTH/2 + ch*CHWIDTH;
           const int y = 20;
           const int target = constrain(scene[sel_chan].values[ch] + cv_offset, SCENE_MIN_VAL, SCENE_MAX_VAL);
-          const int v = 48 - ProportionCV(target, 28);
+          const int v = center - ProportionCV(target, h_);
 
           if (trigsum_mode && ch == 3) {
             gfxIcon(x, y + 20, CLOCK_ICON);
@@ -539,15 +558,15 @@ private:
           }
 
           // actual output level meters
-          const int height = ProportionCV(ViewOut(ch), 28);
-          gfxInvert(x + 5, y + constrain(28 - height, 0, 28), 3, abs(height));
+          const int height = ProportionCV(ViewOut(ch), h_);
+          gfxInvert(x + 5, y + constrain(h_ - height, 0, h_), 3, abs(height));
         }
 
         if (trigsum_mode)
           gfxIcon(1, 1, PhzIcons::pigeons, true);
 
         // ------------------- //
-        gfxDottedLine(0, 48, 127, 48, 4);
+        gfxDottedLine(0, center, 127, center, 4);
 
         // -- Input indicators
         // bias (CV2)
