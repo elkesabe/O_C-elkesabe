@@ -81,7 +81,7 @@
 #include "applets/ShiftGate.h"
 #include "applets/ShiftReg.h"
 #include "applets/Shredder.h"
-#include "applets/Shuffle.h"
+// poner include "applets/Shuffle.h"
 #include "applets/Slew.h"
 #include "applets/Squanch.h"
 #include "applets/Stairs.h"
@@ -201,7 +201,7 @@ AppletRegistry reg{
     DeclareApplet<ShiftGate>{48, 0x45},
     DeclareApplet<ShiftReg>{77, 0x45},
     DeclareApplet<Shredder>{58, 0x01},
-    DeclareApplet<Shuffle>{36, 0x04},
+    // poner DeclareApplet<Shuffle>{36, 0x04},
     DeclareApplet<Slew>{19, 0x01},
     DeclareApplet<Squanch>{46, 0x08},
     DeclareApplet<Stairs>{61, 0x01},
