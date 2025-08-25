@@ -74,7 +74,7 @@
 #include "applets/RunglBook.h"
 #include "applets/ScaleDuet.h"
 #include "applets/Schmitt.h"
-#include "applets/Scope.h"
+// poner #include "applets/Scope.h"
 #include "applets/SequenceX.h"
 #include "applets/Seq32.h"
 #include "applets/SeqPlay7.h"
@@ -89,11 +89,12 @@
 #include "applets/Switch.h"
 #include "applets/SwitchSeq.h"
 #include "applets/TB3PO.h"
-#include "applets/TLNeuron.h"
+// poner #include "applets/TLNeuron.h"
 #include "applets/Trending.h"
 #include "applets/TrigSeq.h"
 #include "applets/TrigSeq16.h"
-#include "applets/Tuner.h"
+// poner #include "applets/Tuner.h"
+#include "applets/WTVCO.h"
 #include "applets/VectorEG.h"
 #include "applets/VectorLFO.h"
 #include "applets/VectorMod.h"
@@ -179,8 +180,8 @@ AppletRegistry reg{
     DeclareApplet<LowerRenz>{21, 0x01},
     DeclareApplet<Metronome>{50, 0x04},
     DeclareApplet<MidiLoop>{81, 0x20},
-    DeclareApplet<hMIDIIn>{150, 0x20},
-    DeclareApplet<hMIDIOut>{27, 0x20},
+    // poner DeclareApplet<hMIDIIn>{150, 0x20},
+    // poner DeclareApplet<hMIDIOut>{27, 0x20},
     DeclareApplet<MixerBal>{33, 0x10},
     DeclareApplet<MultiScale>{73, 0x08},
     DeclareApplet<Palimpsest>{20, 0x02},
@@ -193,7 +194,7 @@ AppletRegistry reg{
     DeclareApplet<RunglBook>{44, 0x01},
     DeclareApplet<ScaleDuet>{26, 0x08},
     DeclareApplet<Schmitt>{40, 0x40},
-    DeclareApplet<Scope>{23, 0x80},
+    // poner DeclareApplet<Scope>{23, 0x80},
     DeclareApplet<Seq32>{75, 0x02},
     DeclareApplet<SeqPlay7>{76, 0x02},
     DeclareApplet<SequenceX>{14, 0x02},
@@ -208,17 +209,18 @@ AppletRegistry reg{
     DeclareApplet<Switch>{3, 0x10},
     DeclareApplet<SwitchSeq>{38, 0x10},
     DeclareApplet<TB_3PO>{60, 0x02},
-    DeclareApplet<TLNeuron>{13, 0x40},
+    // poner DeclareApplet<TLNeuron>{13, 0x40},
     DeclareApplet<Trending>{37, 0x40},
     DeclareApplet<TrigSeq>{11, 0x06},
     DeclareApplet<TrigSeq16>{25, 0x06},
-    DeclareApplet<Tuner>{39, 0x80},
+    // poner DeclareApplet<Tuner>{39, 0x80},
     DeclareApplet<TwoRings>{18, 0x02},
     DeclareApplet<VectorEG>{52, 0x01},
     DeclareApplet<VectorLFO>{49, 0x01},
     DeclareApplet<VectorMod>{53, 0x01},
     DeclareApplet<VectorMorph>{54, 0x01},
     DeclareApplet<Voltage>{43, 0x10},
+    DeclareApplet<WTVCO>{67, 0x80},
 #ifdef PEWPEWPEW
     DeclareApplet<WTVCO>{67, 0x80},
 #endif
